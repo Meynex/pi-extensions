@@ -7,6 +7,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { createContextFork, forkableMessages, type CompactContext, type ContextMode } from "./context";
 import registerSubagents, { boundedText } from "./index";
+import { isProviderLimitError } from "./lifecycle";
 import { RpcProcessClient, type AgentClient, type AgentClientFactory, type AgentClientOptions, type RpcAgentEvent } from "./rpc";
 
 interface OverlayRegistration {
@@ -217,6 +218,7 @@ describe("subagents", () => {
 		expect(harness.tool.parameters.properties.task.maxLength).toBe(16_000);
 		expect(harness.tool.parameters.properties.message.maxLength).toBe(16_000);
 		expect(harness.tool.description).toContain("inherit the current model");
+		expect(harness.tool.description).toContain("quota exhaustion pauses a child");
 		expect(harness.tool.parameters.properties.context).toMatchObject({ enum: ["fresh", "compacted", "forked"], description: expect.stringContaining("default fresh") });
 		expect(harness.tool.parameters.properties.name).toMatchObject({ maxLength: 80, description: expect.stringContaining("Required unique") });
 		expect(harness.tool.parameters.properties.return_when).toMatchObject({ enum: ["any", "all"], description: expect.stringContaining("default any") });
@@ -228,6 +230,7 @@ describe("subagents", () => {
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("action=read") && guideline.includes("action=interrupt"))).toBe(true);
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("return_when=all") && guideline.includes("first mailbox update by default"))).toBe(true);
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("Never ask a healthy running agent") && guideline.includes("wait timed out"))).toBe(true);
+		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("Provider usage") && guideline.includes("action=followup") && guideline.includes("paused child"))).toBe(true);
 		expect(harness.tool.prepareArguments({ action: "send", agent_id: "legacy-id" })).toEqual({ action: "send", agent_name: "legacy-id" });
 		expect(harness.tool.prepareArguments({ action: "wait", agent_ids: ["legacy-a"] })).toEqual({ action: "wait", agent_names: ["legacy-a"] });
 	});
@@ -521,6 +524,78 @@ describe("subagents", () => {
 		harness.clients[0].emit({ type: "agent_settled" });
 		listed = await harness.tool.execute("list", { action: "list" }, undefined, undefined, harness.ctx);
 		expect(listed.details.agents[0]).toMatchObject({ status: "completed", error: undefined, output: "Recovered result" });
+	});
+
+	test("recognizes provider quota errors without confusing context failures", () => {
+		expect(isProviderLimitError("Codex error: The usage limit has been reached")).toBe(true);
+		expect(isProviderLimitError("HTTP status 429: too many requests")).toBe(true);
+		expect(isProviderLimitError("insufficient_quota: credit balance is too low")).toBe(true);
+		expect(isProviderLimitError("Weekly limit reached; resets tomorrow")).toBe(true);
+		expect(isProviderLimitError("Your input exceeds the context window of this model")).toBe(false);
+		expect(isProviderLimitError("Agent process exited unexpectedly")).toBe(false);
+	});
+
+	test("does not cancel children when the parent run settles after a provider error", async () => {
+		const harness = createHarness();
+		await harness.handlers.get("agent_start")?.({}, harness.ctx);
+		await spawnAgent(harness, "Keep working across the parent limit");
+		await harness.handlers.get("agent_settled")?.({}, harness.ctx);
+		const listed = await harness.tool.execute("list-after-parent-error", { action: "list" }, undefined, undefined, harness.ctx);
+		expect(listed.details.agents[0].status).toBe("running");
+		expect(harness.clients[0].stopped).toBe(false);
+		expect(harness.clients[0].abortCalls).toBe(0);
+	});
+
+	test("pauses quota-limited children and resumes their retained conversation", async () => {
+		const harness = createHarness();
+		const started = await spawnAgent(harness, "Continue after quota reset");
+		const name = started.details.agents[0].name;
+		const firstClient = harness.clients[0];
+		const sessionFile = firstClient.options.args[firstClient.options.args.indexOf("--session") + 1];
+		const limitError = "Codex error: The usage limit has been reached";
+		firstClient.emit({ type: "message_end", message: assistant("", "error", limitError) });
+		firstClient.emit({ type: "agent_settled" });
+		await Bun.sleep(0);
+
+		const paused = await harness.tool.execute("list-paused", { action: "list" }, undefined, undefined, harness.ctx);
+		expect(paused.details.agents[0]).toMatchObject({ status: "paused", error: limitError, output: "" });
+		expect(firstClient.stopped).toBe(true);
+		expect(existsSync(sessionFile)).toBe(true);
+		expect(harness.sentMessages.at(-1)).toMatchObject({
+			message: {
+				customType: "subagent-result",
+				content: expect.stringContaining("send this agent a follow-up"),
+				details: { status: "paused", error: limitError },
+			},
+			options: { triggerTurn: false },
+		});
+		const completion = harness.messageRenderers.get("subagent-result")!(harness.sentMessages.at(-1)!.message, { expanded: false }, renderTheme);
+		const completionLines = rendered(completion);
+		expect(completionLines[0]).toBe("• Agent paused");
+		expect(completion.render(100)[0]).toContain("\x1b[33m•\x1b[0m");
+		expect(completionLines[1]).toContain("Ⅱ");
+		expect(completionLines[1]).toContain("paused");
+
+		await harness.tool.execute("resume-paused", {
+			action: "followup",
+			agent_name: name,
+			message: "Continue now that the provider limit has reset",
+		}, undefined, undefined, harness.ctx);
+		expect(harness.clients).toHaveLength(2);
+		expect(harness.clients[1].options.args[harness.clients[1].options.args.indexOf("--session") + 1]).toBe(sessionFile);
+		expect(harness.clients[1].prompts).toEqual(["Continue now that the provider limit has reset"]);
+		const resumed = await harness.tool.execute("list-resumed", { action: "list" }, undefined, undefined, harness.ctx);
+		expect(resumed.details.agents[0]).toMatchObject({ status: "running", error: undefined, output: "" });
+	});
+
+	test("keeps non-quota provider errors failed", async () => {
+		const harness = createHarness();
+		await spawnAgent(harness, "Fail on invalid context");
+		const error = "Your input exceeds the context window of this model";
+		harness.clients[0].emit({ type: "message_end", message: assistant("", "error", error) });
+		harness.clients[0].emit({ type: "agent_settled" });
+		const listed = await harness.tool.execute("list-failed", { action: "list" }, undefined, undefined, harness.ctx);
+		expect(listed.details.agents[0]).toMatchObject({ status: "failed", error });
 	});
 
 	test("forks inherited context before the unresolved delegating tool call", async () => {

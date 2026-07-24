@@ -19,6 +19,7 @@ const TOOL_BRANCH = "  └ ";
 const TOOL_INDENT = "    ";
 const OVERLAY_MAX_ROWS = 10;
 const OVERLAY_AGENT_ROWS = 3;
+const YELLOW = "\x1b[33m";
 
 export interface ToolDetails {
 	action: string;
@@ -56,6 +57,7 @@ function usageText(agent: AgentSnapshot): string {
 export function statusSymbol(status: AgentSnapshot["status"]): string {
 	if (status === "starting" || status === "running") return "●";
 	if (status === "completed") return "✓";
+	if (status === "paused") return "Ⅱ";
 	if (status === "failed") return "×";
 	if (status === "interrupted") return "↯";
 	return "■";
@@ -64,6 +66,7 @@ export function statusSymbol(status: AgentSnapshot["status"]): string {
 function statusColor(status: AgentSnapshot["status"]): string {
 	if (status === "starting" || status === "running") return "accent";
 	if (status === "completed") return "success";
+	if (status === "paused") return "warning";
 	if (status === "failed") return "error";
 	return "muted";
 }
@@ -74,6 +77,7 @@ function overlayTokenCount(agent: AgentSnapshot): number {
 
 function overlayAgentDetail(agent: AgentSnapshot): string {
 	if (agent.status === "completed") return "completed · /agents";
+	if (agent.status === "paused") return `${compact(agent.error || "provider limit reached", 140)} · follow up to resume`;
 	if (agent.status === "failed") return `${compact(agent.error || "failed", 140)} · /agents`;
 	return compact(agent.activity.at(-1) || (agent.status === "starting" ? "starting" : "working"), 160);
 }
@@ -95,9 +99,11 @@ function renderOverlayAgent(agent: AgentSnapshot, width: number, theme: any): st
 	const activityText = truncateToWidth(overlayAgentDetail(agent), activityWidth, "…");
 	const activity = agent.status === "completed"
 		? theme.fg("success", activityText)
-		: agent.status === "failed"
-			? theme.fg("error", activityText)
-			: theme.fg("dim", activityText);
+		: agent.status === "paused"
+			? theme.fg("warning", activityText)
+			: agent.status === "failed"
+				? theme.fg("error", activityText)
+				: theme.fg("dim", activityText);
 	const activityLine = truncateToWidth(`${activityPrefix}${activity}`, width, "…");
 	return [headline, taskLine, activityLine];
 }
@@ -184,6 +190,7 @@ export function messageContent(agent: AgentSnapshot): string {
 		`Agent: ${sanitizeTerminal(agent.name ?? "unnamed agent")}`,
 		`Task: ${sanitizeTerminal(agent.task)}`,
 		agent.error ? `Error: ${agent.error}` : "",
+		agent.status === "paused" ? "Resume: After provider limits reset, send this agent a follow-up to continue the retained conversation." : "",
 		agent.output ? `Result:\n${agent.output}` : "Result: (no final text)",
 		"</subagent_result>",
 	].filter(Boolean).join("\n\n"), RESULT_BYTES);
@@ -254,8 +261,8 @@ function reuseAgentToolLines(context: ToolRenderContext | undefined): AgentToolL
 	return context?.lastComponent instanceof AgentToolLines ? context.lastComponent : new AgentToolLines();
 }
 
-function toolHeadline(partial: boolean, isError: boolean, verb: string, detail: string): string {
-	const mark = partial ? `${MAGENTA}•${RESET}` : isError ? `${RED}•${RESET}` : `${GREEN}•${RESET}`;
+function toolHeadline(partial: boolean, isError: boolean, verb: string, detail: string, isWarning = false): string {
+	const mark = partial ? `${MAGENTA}•${RESET}` : isError ? `${RED}•${RESET}` : isWarning ? `${YELLOW}•${RESET}` : `${GREEN}•${RESET}`;
 	return `${mark} ${BOLD}${verb}${RESET}${detail ? ` ${detail}` : ""}`;
 }
 
@@ -370,7 +377,7 @@ function expandedResultLines(agent: AgentSnapshot, width: number, theme: any): s
 }
 
 function isSettled(agent: AgentSnapshot): boolean {
-	return agent.status === "completed" || agent.status === "failed" || agent.status === "interrupted";
+	return agent.status === "completed" || agent.status === "paused" || agent.status === "failed" || agent.status === "interrupted";
 }
 
 function agentBodyLines(
@@ -482,7 +489,13 @@ class CompletionComponent implements Component {
 	private readonly component: AgentToolLines;
 	constructor(agent: AgentSnapshot, expanded: boolean, theme: any) {
 		this.component = new AgentToolLines((width) => [
-			toolHeadline(false, agent.status === "failed", agent.status === "failed" ? "Agent failed" : "Agent completed", ""),
+			toolHeadline(
+				false,
+				agent.status === "failed",
+				agent.status === "paused" ? "Agent paused" : agent.status === "failed" ? "Agent failed" : "Agent completed",
+				"",
+				agent.status === "paused",
+			),
 			...agentBodyLines(agent, width, theme, {
 				prompt: agent.task,
 				showResult: true,

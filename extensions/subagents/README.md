@@ -126,9 +126,9 @@ overlay stack:
 Each active child gets three rows for identity and usage, a dedicated task
 preview, and latest activity. Elapsed startup time is intentionally omitted. The
 token total combines input, output, cache-read, and cache-write usage across the
-persistent conversation. Completed and failed children disappear from the live
-overlay as soon as they settle, but remain available through `/agents` while
-their conversation is open. The card remains visible while children are running or mailbox updates are unread.
+persistent conversation. Completed, paused, and failed children disappear from
+the live overlay as soon as they settle, but remain available through `/agents`
+while their conversation is open. The card remains visible while children are running or mailbox updates are unread.
 Its title and body show unread counts. It shows up to three detailed children and
 uses an `/agents` overflow hint when space permits. The card hides
 on terminals narrower than 90 columns or shorter than 10 rows. Use `/overlay`
@@ -169,6 +169,8 @@ session:
 - Child dialogs are cancelled because no interactive UI is attached to the RPC process.
 - Children can send bounded interim mailbox updates with `report_to_parent`; final responses are reported automatically.
 - Settled and interrupted children hibernate: their RPC process exits while the temporary session remains available.
+- Provider usage, quota, and rate-limit errors settle as `paused`, not `failed`; the conversation remains available and a follow-up resumes it after limits reset.
+- A parent provider error does not cancel children. Because account quotas are commonly shared, children may independently pause when their own next provider request reaches the same limit.
 - Up to four queue-only messages remain pending on a hibernated child; a fifth is rejected until a follow-up delivers the queue.
 - Follow-ups lazily start a new child process against the retained session and continue the same conversation.
 - Concurrent `message`, `followup`, and `send` calls are dispatched one at a time per child in invocation order. A rejected dispatch cannot roll back or stop a later one; queue-only messages remain queued when the child is still idle at their turn.

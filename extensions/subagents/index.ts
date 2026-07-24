@@ -546,7 +546,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	pi.registerTool({
 		name: TOOL_NAME,
 		label: "Agents",
-		description: "Spawn and coordinate uniquely named child agents with isolated persistent context. Actions: spawn starts one; message queues context without starting an idle child turn; followup steers or resumes a child; send is a legacy followup alias; wait collects mailbox updates using configurable bounds and can wake on any update, final results only, or all selected finals; list shows status; read returns the latest response; interrupt stops the current turn but preserves context; close deletes it. Children inherit the current model, tools, working directory, and project instructions and can report bounded interim progress. Mailbox updates enter the next safe model request, display when idle without starting a turn, and preserve unread finals across reloads.",
+		description: "Spawn and coordinate uniquely named child agents with isolated persistent context. Actions: spawn starts one; message queues context without starting an idle child turn; followup steers or resumes a child; send is a legacy followup alias; wait collects mailbox updates using configurable bounds and can wake on any update, final results only, or all selected finals; list shows status; read returns the latest response without restarting it; interrupt stops the current turn but preserves context; close deletes it. Children inherit the current model, tools, working directory, and project instructions and can report bounded interim progress. Provider quota exhaustion pauses a child with its conversation retained for follow-up. Mailbox updates enter the next safe model request, display when idle without starting a turn, and preserve unread finals across reloads.",
 		promptSnippet: "Spawn and coordinate isolated child agents for explicitly delegated work",
 		promptGuidelines: [
 			"Use agents only when the user or applicable project instructions request delegation, subagents, or parallel agent work.",
@@ -556,6 +556,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			"Use agents action=wait only when blocked on child results; it resumes after the first mailbox update by default, accepts wake_on=final when progress must not wake it, and uses return_when=all only when every selected final result is required. Timeouts do not stop agents or force parent turns.",
 			"Never ask a healthy running agent to stop or finalize merely because a wait timed out. Continue independent work or wait again; curtail an agent only when it is stuck, mis-scoped, or constrained by a user deadline.",
 			"Use agents action=read to retrieve a child's latest response again without restarting it, and action=interrupt to stop active work while preserving the conversation for follow-up.",
+			"Provider usage, quota, and rate limits pause children without discarding their conversations. After limits reset, use action=followup to resume a paused child instead of spawning a replacement or closing it.",
 			"After collecting a child's final result, call agents with action=close when no further follow-up is needed; settled children hibernate but retain a conversation slot until closed.",
 			"Give concurrently writing child agents disjoint file scopes to avoid conflicting edits.",
 		],
@@ -787,7 +788,8 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			const agent = ordered[labels.indexOf(selected)];
 			if (!agent) return;
 			if (ctx.mode && ctx.mode !== "tui") {
-				ctx.ui.notify(boundedText(formatAgent(snapshot(agent), true), 4 * 1024), agent.status === "failed" ? "error" : "info");
+				const level = agent.status === "failed" ? "error" : agent.status === "paused" ? "warning" : "info";
+				ctx.ui.notify(boundedText(formatAgent(snapshot(agent), true), 4 * 1024), level);
 				return;
 			}
 			await showTranscript(agent, ctx);

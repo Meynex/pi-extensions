@@ -3,7 +3,7 @@ import type { AgentClient, AgentClientFactory, AgentClientOptions, RpcAgentEvent
 
 export const RESULT_BYTES = 24 * 1024;
 
-export type AgentStatus = "starting" | "running" | "completed" | "failed" | "interrupted" | "closed";
+export type AgentStatus = "starting" | "running" | "completed" | "paused" | "failed" | "interrupted" | "closed";
 
 export interface AgentUsage {
 	input: number;
@@ -58,7 +58,7 @@ export function isAgentSnapshot(value: unknown): value is AgentSnapshot {
 		&& (agent.name === undefined || typeof agent.name === "string")
 		&& typeof agent.task === "string"
 		&& (["fresh", "compacted", "forked"] as unknown[]).includes(agent.contextMode)
-		&& (["starting", "running", "completed", "failed", "interrupted", "closed"] as unknown[]).includes(agent.status)
+		&& (["starting", "running", "completed", "paused", "failed", "interrupted", "closed"] as unknown[]).includes(agent.status)
 		&& typeof agent.cwd === "string"
 		&& (agent.model === undefined || typeof agent.model === "string")
 		&& typeof agent.startedAt === "number"
@@ -115,6 +115,21 @@ export function boundedText(text: string, maxBytes: number): string {
 
 export function isActive(agent: Pick<ManagedAgent, "status">): boolean {
 	return agent.status === "starting" || agent.status === "running";
+}
+
+/** Provider-side quota exhaustion is recoverable after the account limit resets. */
+export function isProviderLimitError(message: string): boolean {
+	const normalized = sanitizeTerminal(message).toLowerCase().replace(/\s+/g, " ").trim();
+	return [
+		/\busage limit\b/,
+		/\brate[ -]?limit(?:ed|ing)?\b/,
+		/\btoo many requests\b/,
+		/\binsufficient[_ -]?quota\b/,
+		/\b(?:quota|credits?|credit balance)\b.{0,80}\b(?:exceeded|exhausted|depleted|reached|too low|limit)\b/,
+		/\b(?:billing|spending)(?: hard)? limit\b/,
+		/\b(?:daily|weekly|monthly) limit\b.{0,80}\b(?:reached|exceeded|resets?)\b/,
+		/\b(?:http (?:status )?|status(?: code)? )429\b/,
+	].some((pattern) => pattern.test(normalized));
 }
 
 export function extractAssistantText(message: any): string {
@@ -180,7 +195,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions) {
 		}
 	};
 
-	const finishRun = (agent: ManagedAgent, status: "completed" | "failed", error?: string): void => {
+	const finishRun = (agent: ManagedAgent, status: "completed" | "paused" | "failed", error?: string): void => {
 		if (agent.runSettled || agent.status === "closed") return;
 		agent.runSettled = true;
 		agent.status = status;
@@ -248,7 +263,10 @@ export function createAgentLifecycle(options: AgentLifecycleOptions) {
 			if (agent.activity.length > 12) agent.activity.shift();
 			options.updateOverlay();
 		}
-		if (event.type === "agent_settled") finishRun(agent, agent.error ? "failed" : "completed", agent.error);
+		if (event.type === "agent_settled") {
+			const status = !agent.error ? "completed" : isProviderLimitError(agent.error) ? "paused" : "failed";
+			finishRun(agent, status, agent.error);
+		}
 	};
 
 	const attachClient = (agent: ManagedAgent, client: AgentClient): void => {
