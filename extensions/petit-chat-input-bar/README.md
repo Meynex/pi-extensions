@@ -1,6 +1,6 @@
 # petit-chat-input-bar
 
-A tiny animated companion sprite that sits above the editor (a la Vibe's petit
+A tiny animated companion sprite that sits above the editor (à la Vibe's petit
 chat). It is purely cosmetic and uses smart animation by default.
 
 The pet is anchored just above the input bar's top border so its feet share the

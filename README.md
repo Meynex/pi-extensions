@@ -7,7 +7,7 @@ the terminal UI.
 
 These are generic extensions with no third-party npm dependencies. They ship
 together because a few share rendering helpers and runtime services, as shown
-above.
+below.
 
 ## Install
 
@@ -84,8 +84,9 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`cached-line-resets`](extensions/cached-line-resets/) | Caches pi's per-line ANSI reset application so rendering large transcript regions stays fast |
 | [`doctor`](extensions/doctor/) | Run diagnostics on your pi setup |
 | [`image-store`](extensions/image-store/) | Stores image payloads as deduplicated sidecars and renders transcript history lazily |
+| [`koliko`](extensions/koliko/) | Points to Koliko's separately maintained, privacy-preserving Pi usage collector |
 
-Each extension has its own `README.md` with commands, config, and sample output.
+Each extension directory has its own `README.md` describing its behavior or, for external integrations, linking to the authoritative implementation.
 
 ## Custom keybindings
 
@@ -132,23 +133,35 @@ MIT
 - **System/services:** Only where noted in each extension README.
 
 An arrow means the extension on the left directly imports the extension on the
-right. Extensions not shown have no internal extension dependency.
+right. Extensions not shown have no internal extension dependency. This block
+is checked against source imports by `documentation.test.ts`.
 
+<!-- extension-imports:start -->
 ```text
-background-jobs <------> better-native-pi ------> code-blocks
-                           |
-                           +---------------------> hyperlinks
-                           |
-                           +---------------------> image-store
-web-search --------------> better-native-pi
-telegram-notifications --> questions
-doctor ------------------> accent-color
-overlay-stack -----------> accent-color
-background-jobs ---------> overlay-stack
-edit-summary ------------> overlay-stack <------- plan-progress
-goal --------------------> overlay-stack <------- subagents
+background-jobs -> better-native-pi
+background-jobs -> overlay-stack
+better-native-pi -> background-jobs
+better-native-pi -> code-blocks
+better-native-pi -> hyperlinks
+better-native-pi -> image-store
+doctor -> accent-color
+edit-summary -> overlay-stack
+footer -> subagents
+goal -> better-native-pi
+goal -> overlay-stack
+overlay-stack -> accent-color
+plan-progress -> overlay-stack
+subagents -> better-native-pi
+subagents -> overlay-stack
+subagents -> transcript
+web-search -> better-native-pi
 ```
+<!-- extension-imports:end -->
 
 `background-jobs` and `better-native-pi` deliberately integrate in both
 directions: the former reuses shared rendering primitives, while the latter
 owns `bash` and delegates its execution to the managed terminal service.
+
+Runtime event coupling does not appear in the direct-import graph. In particular,
+`telegram-notifications` consumes the events emitted by `questions` without
+importing that extension.

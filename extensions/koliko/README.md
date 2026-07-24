@@ -6,7 +6,8 @@ token usage, provider-reported cost, tool performance, compaction, goals, and
 delegated work without collecting prompts, responses, source code, or tool
 content.
 
-The collector is maintained in the
+This directory intentionally contains documentation only; Pi does not load an
+extension from it. The collector is maintained in the
 [Koliko repository](https://github.com/angristan/koliko/tree/main/collectors/pi).
 See its README for installation, configuration, privacy guarantees, and
 troubleshooting.
