@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -64,6 +64,7 @@ class FakeClient implements AgentClient {
 	onExit(listener: (error: Error) => void) { this.exits.add(listener); return () => this.exits.delete(listener); }
 	getStderr() { return ""; }
 	emit(event: RpcAgentEvent) { for (const listener of [...this.events]) listener(event); }
+	exit(error: Error) { for (const listener of [...this.exits]) listener(error); }
 	report(message: string, callId = `report-${this.events.size}`) {
 		this.emit({ type: "tool_execution_start", toolCallId: callId, toolName: "report_to_parent", args: { message } });
 		this.emit({ type: "tool_execution_end", toolCallId: callId, toolName: "report_to_parent", isError: false, result: { content: [] } });
@@ -87,14 +88,18 @@ interface Harness {
 	overlay: OverlayRegistration;
 	ctx: any;
 	parent: SessionManager;
+	storageRoot: string;
 }
 
 const harnesses: Harness[] = [];
+const storageRoots = new Set<string>();
 
 afterEach(async () => {
 	for (const harness of harnesses.splice(0)) {
 		await harness.handlers.get("session_shutdown")?.({ reason: "quit" }, harness.ctx);
 	}
+	await Promise.all([...storageRoots].map((root) => rm(root, { recursive: true, force: true })));
+	storageRoots.clear();
 });
 
 function createHarness(options: {
@@ -106,6 +111,8 @@ function createHarness(options: {
 	compactContext?: CompactContext;
 	config?: any;
 	clientFactory?: AgentClientFactory;
+	parent?: SessionManager;
+	storageRoot?: string;
 } = {}): Harness {
 	const tools = new Map<string, any>();
 	const commands = new Map<string, any>();
@@ -116,14 +123,18 @@ function createHarness(options: {
 	const sentMessages: Array<{ message: any; options: any }> = [];
 	const statuses = new Map<string, string | undefined>();
 	const notifications: string[] = [];
-	const parent = SessionManager.inMemory(process.cwd());
-	parent.appendModelChange("test-provider", "test-model");
-	parent.appendThinkingLevelChange("medium");
-	if (!options.firstTurn) {
-		parent.appendMessage({ role: "user", content: "Original request", timestamp: Date.now() });
-		parent.appendMessage(assistant("Original answer"));
+	const storageRoot = options.storageRoot ?? mkdtempSync(join(tmpdir(), "pi-subagents-test-"));
+	storageRoots.add(storageRoot);
+	const parent = options.parent ?? SessionManager.inMemory(process.cwd());
+	if (!options.parent) {
+		parent.appendModelChange("test-provider", "test-model");
+		parent.appendThinkingLevelChange("medium");
+		if (!options.firstTurn) {
+			parent.appendMessage({ role: "user", content: "Original request", timestamp: Date.now() });
+			parent.appendMessage(assistant("Original answer"));
+		}
 	}
-	if (options.withPendingToolCall) {
+	if (!options.parent && options.withPendingToolCall) {
 		parent.appendMessage({ role: "user", content: "Delegate this", timestamp: Date.now() });
 		parent.appendMessage({
 			...assistant(""),
@@ -159,6 +170,7 @@ function createHarness(options: {
 		config: options.config,
 		createContextFork: options.forkContext,
 		compactContext: options.compactContext,
+		storageRoot,
 		registerOverlayCard(definition) {
 			overlay = { definition, invalidations: 0, unregistered: false };
 			return {
@@ -175,7 +187,7 @@ function createHarness(options: {
 		},
 	});
 	if (!overlay) throw new Error("Subagents overlay was not registered");
-	const harness = { tool: tools.get("agents"), commands, messageRenderers, entryRenderers, handlers, clients, sentMessages, statuses, notifications, overlay, ctx, parent };
+	const harness = { tool: tools.get("agents"), commands, messageRenderers, entryRenderers, handlers, clients, sentMessages, statuses, notifications, overlay, ctx, parent, storageRoot };
 	harnesses.push(harness);
 	void handlers.get("session_start")?.({ reason: "startup" }, ctx);
 	return harness;
@@ -219,6 +231,7 @@ describe("subagents", () => {
 		expect(harness.tool.parameters.properties.message.maxLength).toBe(16_000);
 		expect(harness.tool.description).toContain("inherit the current model");
 		expect(harness.tool.description).toContain("quota exhaustion pauses a child");
+		expect(harness.tool.description).toContain("checkpoint open conversations");
 		expect(harness.tool.parameters.properties.context).toMatchObject({ enum: ["fresh", "compacted", "forked"], description: expect.stringContaining("default fresh") });
 		expect(harness.tool.parameters.properties.name).toMatchObject({ maxLength: 80, description: expect.stringContaining("Required unique") });
 		expect(harness.tool.parameters.properties.return_when).toMatchObject({ enum: ["any", "all"], description: expect.stringContaining("default any") });
@@ -231,6 +244,7 @@ describe("subagents", () => {
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("return_when=all") && guideline.includes("first mailbox update by default"))).toBe(true);
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("Never ask a healthy running agent") && guideline.includes("wait timed out"))).toBe(true);
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("Provider usage") && guideline.includes("action=followup") && guideline.includes("paused child"))).toBe(true);
+		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("Reload, quit") && guideline.includes("restore them hibernated"))).toBe(true);
 		expect(harness.tool.prepareArguments({ action: "send", agent_id: "legacy-id" })).toEqual({ action: "send", agent_name: "legacy-id" });
 		expect(harness.tool.prepareArguments({ action: "wait", agent_ids: ["legacy-a"] })).toEqual({ action: "wait", agent_names: ["legacy-a"] });
 	});
@@ -1527,6 +1541,102 @@ setInterval(() => {}, 1000);
 		expect(listed.details.agents).toHaveLength(2);
 	});
 
+	test("checkpoints active children across reload and restores them hibernated", async () => {
+		const first = createHarness();
+		const started = await spawnAgent(first, "Survive extension reload");
+		const name = started.details.agents[0].name;
+		const sessionFile = first.clients[0].options.args[first.clients[0].options.args.indexOf("--session") + 1];
+		expect(sessionFile.startsWith(first.storageRoot)).toBe(true);
+
+		await first.handlers.get("session_shutdown")?.({ reason: "reload" }, first.ctx);
+		expect(first.clients[0].abortCalls).toBe(1);
+		expect(first.clients[0].stopped).toBe(true);
+		expect(existsSync(sessionFile)).toBe(true);
+		expect(first.parent.getEntries().some((entry: any) =>
+			entry.customType === "subagent-state"
+			&& entry.data?.state === "open"
+			&& entry.data?.agent?.name === name
+			&& entry.data?.agent?.status === "paused",
+		)).toBe(true);
+		harnesses.splice(harnesses.indexOf(first), 1);
+
+		const restored = createHarness({ parent: first.parent, storageRoot: first.storageRoot });
+		let listed = await restored.tool.execute("list-restored", { action: "list" }, undefined, undefined, restored.ctx);
+		expect(listed.details.agents).toMatchObject([{ name, status: "paused" }]);
+		expect(restored.clients).toHaveLength(0);
+		await restored.tool.execute("resume-restored", {
+			action: "followup",
+			agent_name: name,
+			message: "Continue after reload",
+		}, undefined, undefined, restored.ctx);
+		expect(restored.clients).toHaveLength(1);
+		expect(restored.clients[0].options.args[restored.clients[0].options.args.indexOf("--session") + 1]).toBe(sessionFile);
+		expect(restored.clients[0].prompts).toEqual(["Continue after reload"]);
+
+		await restored.tool.execute("close-restored", { action: "close", agent_name: name }, undefined, undefined, restored.ctx);
+		expect(existsSync(sessionFile)).toBe(false);
+		expect(restored.parent.getEntries().some((entry: any) =>
+			entry.customType === "subagent-state" && entry.data?.id === started.details.agents[0].id && entry.data?.state === "closed",
+		)).toBe(true);
+		await restored.handlers.get("session_shutdown")?.({ reason: "reload" }, restored.ctx);
+		harnesses.splice(harnesses.indexOf(restored), 1);
+
+		const afterClose = createHarness({ parent: first.parent, storageRoot: first.storageRoot });
+		listed = await afterClose.tool.execute("list-after-close", { action: "list" }, undefined, undefined, afterClose.ctx);
+		expect(listed.details.agents).toEqual([]);
+	});
+
+	test("restores settled children and queued context after parent quit", async () => {
+		const first = createHarness();
+		const started = await spawnAgent(first, "Retain completed review");
+		const name = started.details.agents[0].name;
+		first.clients[0].complete("Completed result before quit");
+		await Bun.sleep(0);
+		await first.tool.execute("queue-before-quit", {
+			action: "message",
+			agent_name: name,
+			message: "Queued context before quit",
+		}, undefined, undefined, first.ctx);
+		await first.handlers.get("session_shutdown")?.({ reason: "quit" }, first.ctx);
+		harnesses.splice(harnesses.indexOf(first), 1);
+
+		const restored = createHarness({ parent: first.parent, storageRoot: first.storageRoot });
+		const read = await restored.tool.execute("read-after-quit", { action: "read", agent_name: name }, undefined, undefined, restored.ctx);
+		expect(read.details.agents[0]).toMatchObject({ status: "completed", output: "Completed result before quit" });
+		expect(restored.clients).toHaveLength(0);
+		await restored.tool.execute("followup-after-quit", {
+			action: "followup",
+			agent_name: name,
+			message: "Resume after quit",
+		}, undefined, undefined, restored.ctx);
+		expect(restored.clients[0].prompts[0]).toContain("Queued message:\nQueued context before quit");
+		expect(restored.clients[0].prompts[0]).toContain("Follow-up task:\nResume after quit");
+	});
+
+	test("retains child context after an unexpected RPC process exit", async () => {
+		const crashed = createHarness();
+		const started = await spawnAgent(crashed, "Recover from child process exit");
+		const name = started.details.agents[0].name;
+		const sessionFile = crashed.clients[0].options.args[crashed.clients[0].options.args.indexOf("--session") + 1];
+		crashed.clients[0].exit(new Error("RPC process crashed"));
+		await Bun.sleep(0);
+		let failed = await crashed.tool.execute("list-crashed", { action: "list" }, undefined, undefined, crashed.ctx);
+		expect(failed.details.agents[0]).toMatchObject({ status: "failed", error: "RPC process crashed" });
+		expect(existsSync(sessionFile)).toBe(true);
+		harnesses.splice(harnesses.indexOf(crashed), 1);
+
+		const restored = createHarness({ parent: crashed.parent, storageRoot: crashed.storageRoot });
+		failed = await restored.tool.execute("list-restored-crash", { action: "list" }, undefined, undefined, restored.ctx);
+		expect(failed.details.agents[0]).toMatchObject({ name, status: "failed", error: "RPC process crashed" });
+		await restored.tool.execute("resume-crashed", {
+			action: "followup",
+			agent_name: name,
+			message: "Resume from the retained session",
+		}, undefined, undefined, restored.ctx);
+		expect(restored.clients).toHaveLength(1);
+		expect(restored.clients[0].options.args[restored.clients[0].options.args.indexOf("--session") + 1]).toBe(sessionFile);
+	});
+
 	test("cancels a spawn that outlives parent session shutdown", async () => {
 		let releaseContext!: () => void;
 		const contextGate = new Promise<void>((resolve) => { releaseContext = resolve; });
@@ -1571,7 +1681,7 @@ setInterval(() => {}, 1000);
 		await spawnAgent(harness, "First shutdown task");
 		await spawnAgent(harness, "Second shutdown task");
 		harness.clients[0].stopError = new Error("first stop failed");
-		await expect(harness.handlers.get("session_shutdown")?.({ reason: "quit" }, harness.ctx)).rejects.toThrow("Failed to clean up");
+		await expect(harness.handlers.get("session_shutdown")?.({ reason: "quit" }, harness.ctx)).rejects.toThrow("Failed to checkpoint");
 		expect(harness.clients[1].stopped).toBe(true);
 		expect(harness.overlay.unregistered).toBe(true);
 		expect(harness.statuses.size).toBe(0);

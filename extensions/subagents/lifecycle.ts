@@ -2,6 +2,7 @@ import type { ContextFork, ContextMode } from "./context.js";
 import type { AgentClient, AgentClientFactory, AgentClientOptions, RpcAgentEvent } from "./rpc.js";
 
 export const RESULT_BYTES = 24 * 1024;
+const SUSPEND_ABORT_MS = 500;
 
 export type AgentStatus = "starting" | "running" | "completed" | "paused" | "failed" | "interrupted" | "closed";
 
@@ -172,6 +173,7 @@ export interface AgentLifecycleOptions {
 	publishMailboxEvent(agent: ManagedAgent, kind: "message" | "final", content: string): void;
 	discardMailboxEvents(agent: ManagedAgent): void;
 	recordUsage(agent: ManagedAgent, message: any): void;
+	checkpointAgent(agent: ManagedAgent): void;
 	updateOverlay(): void;
 	refreshTranscript(): void;
 	trimClosed(): void;
@@ -201,6 +203,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions) {
 		agent.status = status;
 		agent.endedAt = Date.now();
 		if (error) agent.error = boundedText(sanitizeTerminal(error), 4 * 1024);
+		options.checkpointAgent(agent);
 		options.publishMailboxEvent(agent, "final", agent.error || agent.output || "(no final text)");
 		agent.resolveCompletion();
 		options.updateOverlay();
@@ -279,31 +282,12 @@ export function createAgentLifecycle(options: AgentLifecycleOptions) {
 		client.onExit((error) => {
 			if (agent.client !== client) return;
 			agent.client = undefined;
-			options.updateOverlay();
-			void agent.fork.cleanup().then(
-				() => {
-					agent.cleanupComplete = true;
-					if (isActive(agent)) finishRun(agent, "failed", error.message);
-					else {
-						if (agent.status !== "closed") {
-							agent.status = "closed";
-							agent.endedAt ??= Date.now();
-							options.updateOverlay();
-						}
-						options.trimClosed();
-					}
-				},
-				(cleanupError) => {
-					const message = `${error.message}; context cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
-					if (isActive(agent)) finishRun(agent, "failed", message);
-					else {
-						agent.status = "closed";
-						agent.error = boundedText(sanitizeTerminal(message), 4 * 1024);
-						agent.endedAt ??= Date.now();
-						options.updateOverlay();
-					}
-				},
-			);
+			if (isActive(agent)) finishRun(agent, "failed", error.message);
+			else {
+				agent.activity.push(`process exited: ${compact(error.message, 100)}`);
+				if (agent.activity.length > 12) agent.activity.shift();
+				options.updateOverlay();
+			}
 		});
 	};
 
@@ -373,6 +357,41 @@ export function createAgentLifecycle(options: AgentLifecycleOptions) {
 		}
 	};
 
+	const suspendAgent = async (agent: ManagedAgent, reason: string): Promise<void> => {
+		if (agent.status === "closed" || agent.cleanupComplete) return;
+		agent.suppressNotifications = true;
+		agent.pendingReports.clear();
+		if (isActive(agent)) {
+			agent.runSettled = true;
+			agent.status = "paused";
+			agent.endedAt = Date.now();
+			agent.error = undefined;
+			agent.activity.push(`paused: ${compact(reason, 100)}`);
+			if (agent.activity.length > 12) agent.activity.shift();
+			agent.resolveCompletion();
+			options.updateOverlay();
+			const client = agent.client;
+			if (client) {
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				try {
+					await Promise.race([
+						client.abort(),
+						new Promise<never>((_resolve, reject) => {
+							timer = setTimeout(() => reject(new Error("abort timed out")), SUSPEND_ABORT_MS);
+						}),
+					]);
+				} catch (error) {
+					agent.activity.push(`abort failed: ${compact(error instanceof Error ? error.message : String(error), 100)}`);
+					if (agent.activity.length > 12) agent.activity.shift();
+				} finally {
+					if (timer) clearTimeout(timer);
+				}
+			}
+		}
+		await hibernateAgent(agent);
+		if (agent.status === "paused") agent.error = undefined;
+	};
+
 	const interruptAgent = async (agent: ManagedAgent): Promise<void> => {
 		if (!isActive(agent)) return;
 		agent.suppressNotifications = true;
@@ -396,5 +415,5 @@ export function createAgentLifecycle(options: AgentLifecycleOptions) {
 		await hibernateAgent(agent);
 	};
 
-	return { attachClient, closeAgent, ensureClient, finishRun, hibernateAgent, interruptAgent };
+	return { attachClient, closeAgent, ensureClient, finishRun, hibernateAgent, interruptAgent, suspendAgent };
 }

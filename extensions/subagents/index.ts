@@ -7,6 +7,7 @@ import {
 	compactContext,
 	createContextFork,
 	parentContextMessages,
+	restoreContextFork,
 	type CompactContext,
 	type ContextFork,
 	type ContextMode,
@@ -36,7 +37,7 @@ import {
 	type ManagedAgent,
 } from "./lifecycle.js";
 import { AgentMailbox, type AgentMailboxEvent } from "./mailbox.js";
-import { createMailboxPersistence } from "./persistence.js";
+import { createAgentPersistence, createMailboxPersistence } from "./persistence.js";
 import {
 	COMPLETION_MESSAGE_TYPE,
 	MAILBOX_BATCH_TYPE,
@@ -93,6 +94,7 @@ export interface SubagentsOptions {
 	registerOverlayCard?: typeof registerOverlayCard;
 	maxAgents?: number;
 	config?: SubagentsRuntimeConfig;
+	storageRoot?: string;
 }
 
 
@@ -117,9 +119,10 @@ function registerChildReporter(pi: ExtensionAPI): void {
 }
 
 
-function buildArgs(pi: ExtensionAPI, ctx: any, fork: ContextFork): string[] {
+function buildArgs(pi: ExtensionAPI, ctx: any, fork: ContextFork, modelOverride?: string): string[] {
 	const args = ["--mode", "rpc", "--session", fork.sessionFile, "--session-dir", fork.directory];
-	if (ctx.model) args.push("--model", `${ctx.model.provider}/${ctx.model.id}`);
+	if (modelOverride) args.push("--model", modelOverride);
+	else if (ctx.model) args.push("--model", `${ctx.model.provider}/${ctx.model.id}`);
 	const thinking = pi.getThinkingLevel();
 	if (thinking) args.push("--thinking", thinking);
 	const tools = [...pi.getActiveTools().filter((name) => name !== TOOL_NAME && name !== REPORT_TOOL_NAME), REPORT_TOOL_NAME];
@@ -282,6 +285,15 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			throw new Error("Parent session ended while spawning subagent");
 		}
 	};
+	const clientOptionsFor = (ctx: any, fork: ContextFork, id: string, cwd: string, modelOverride?: string): AgentClientOptions => {
+		const invocation = getPiInvocation(buildArgs(pi, ctx, fork, modelOverride));
+		return {
+			command: invocation.command,
+			args: invocation.args,
+			cwd,
+			env: childEnvironment(id),
+		};
+	};
 	const compactedContextFor = (ctx: any, signal?: AbortSignal): Promise<string> => {
 		const key = `${generation}:${ctx.sessionManager.getLeafId() ?? "empty"}`;
 		if (compactedSnapshot?.key === key) return compactedSnapshot.promise;
@@ -292,6 +304,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		compactedSnapshot = { key, promise };
 		return promise;
 	};
+	const agentPersistence = createAgentPersistence(pi);
 	const { persistFinal: persistMailboxFinal, restoreFinals: restoreMailboxFinals } = createMailboxPersistence(pi, mailbox);
 	const removeMailboxEvent = (event: AgentMailboxEvent<AgentSnapshot>) => {
 		mailbox.remove(event.sequence);
@@ -388,6 +401,14 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			timestamp: Date.now(),
 		};
 	};
+	const persistAgentCheckpoint = (agent: ManagedAgent): void => {
+		agentPersistence.persistOpen(
+			snapshot(agent),
+			{ messageCount: agent.fork.messageCount, initialEntryCount: agent.fork.initialEntryCount },
+			agent.queuedMessages,
+			agent.completionDelivery,
+		);
+	};
 	const {
 		attachClient,
 		closeAgent,
@@ -395,6 +416,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		finishRun,
 		hibernateAgent,
 		interruptAgent,
+		suspendAgent,
 	} = createAgentLifecycle({
 		createClient,
 		reportToolName: REPORT_TOOL_NAME,
@@ -410,30 +432,61 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			pi.appendEntry(SUBAGENT_USAGE_ENTRY_TYPE, persistedUsage);
 			pi.events.emit(SUBAGENT_USAGE_EVENT, persistedUsage);
 		},
+		checkpointAgent: persistAgentCheckpoint,
 		updateOverlay,
 		refreshTranscript() { activeTranscriptRefresh?.(); },
 		trimClosed,
 	});
+	const restorePersistedAgents = (ctx: any): void => {
+		if (agents.size > 0) return;
+		for (const record of agentPersistence.restore(ctx)) {
+			const fork = restoreContextFork(ctx, record.agent.id, record.context, options.storageRoot);
+			if (!fork || record.agent.status === "closed") continue;
+			const saved = structuredClone(record.agent);
+			if (isActive(saved)) {
+				saved.status = "paused";
+				saved.endedAt ??= Date.now();
+				saved.error = undefined;
+				saved.activity.push("paused: parent session restarted");
+				if (saved.activity.length > 12) saved.activity.shift();
+			}
+			const agent: ManagedAgent = {
+				...saved,
+				clientOptions: clientOptionsFor(ctx, fork, saved.id, saved.cwd, saved.model),
+				fork,
+				completion: Promise.resolve(),
+				resolveCompletion() {},
+				runSettled: true,
+				waiting: 0,
+				queuedMessages: [...record.queuedMessages],
+				pendingReports: new Map(),
+				completionDelivery: record.completionDelivery,
+				suppressNotifications: false,
+				generation,
+				cleanupComplete: false,
+				transitioning: false,
+			};
+			agents.set(agent.id, agent);
+			if (agent.name) usedAgentNames.add(agentNameKey(agent.name));
+		}
+	};
 	const startAgent = async (task: string, ctx: any, contextMode: ContextMode = "fresh", name?: string, signal?: AbortSignal): Promise<ManagedAgent> => {
 		const normalizedTask = boundedInput(task, "spawn task", MAX_TASK_CHARS);
 		const normalizedName = normalizeAgentName(name, MAX_AGENT_NAME_CHARS);
 		const reservation = reserveSpawn(normalizedName);
 		const seed = normalizedName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 16) || "agent";
 		let id: string;
-		do { id = `${seed}-${randomBytes(3).toString("hex")}`; } while (agents.has(id));
+		do { id = `${seed}-${randomBytes(6).toString("hex")}`; } while (agents.has(id));
 		let fork: ContextFork | undefined;
 		let agent: ManagedAgent | undefined;
 		try {
 			const compactedSummary = contextMode === "compacted" ? await compactedContextFor(ctx, signal) : undefined;
-			fork = await forkContext(ctx, contextMode, compactedSummary);
+			fork = await forkContext(ctx, contextMode, compactedSummary, {
+				agentId: id,
+				root: options.storageRoot,
+			});
 			assertCurrentSession(reservation.generation);
-			const invocation = getPiInvocation(buildArgs(pi, ctx, fork));
-			const clientOptions: AgentClientOptions = {
-				command: invocation.command,
-				args: invocation.args,
-				cwd: ctx.cwd,
-				env: childEnvironment(id),
-			};
+			const clientOptions = clientOptionsFor(ctx, fork, id, ctx.cwd);
 			const client = createClient(clientOptions);
 			let resolveCompletion!: () => void;
 			agent = {
@@ -473,6 +526,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			agent.status = "running";
 			await client.prompt(childTask(normalizedName, normalizedTask, contextMode));
 			assertCurrentSession(reservation.generation);
+			persistAgentCheckpoint(agent);
 			updateOverlay();
 			return agent;
 		} catch (error) {
@@ -546,7 +600,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	pi.registerTool({
 		name: TOOL_NAME,
 		label: "Agents",
-		description: "Spawn and coordinate uniquely named child agents with isolated persistent context. Actions: spawn starts one; message queues context without starting an idle child turn; followup steers or resumes a child; send is a legacy followup alias; wait collects mailbox updates using configurable bounds and can wake on any update, final results only, or all selected finals; list shows status; read returns the latest response without restarting it; interrupt stops the current turn but preserves context; close deletes it. Children inherit the current model, tools, working directory, and project instructions and can report bounded interim progress. Provider quota exhaustion pauses a child with its conversation retained for follow-up. Mailbox updates enter the next safe model request, display when idle without starting a turn, and preserve unread finals across reloads.",
+		description: "Spawn and coordinate uniquely named child agents with isolated persistent context. Actions: spawn starts one; message queues context without starting an idle child turn; followup steers or resumes a child; send is a legacy followup alias; wait collects mailbox updates using configurable bounds and can wake on any update, final results only, or all selected finals; list shows status; read returns the latest response without restarting it; interrupt stops the current turn but preserves context; close deletes it. Children inherit the current model, tools, working directory, and project instructions and can report bounded interim progress. Provider quota exhaustion pauses a child with its conversation retained for follow-up. Reload, quit, and session replacement stop child processes but checkpoint open conversations for restoration with the same parent session. Mailbox updates enter the next safe model request, display when idle without starting a turn, and preserve unread finals across reloads.",
 		promptSnippet: "Spawn and coordinate isolated child agents for explicitly delegated work",
 		promptGuidelines: [
 			"Use agents only when the user or applicable project instructions request delegation, subagents, or parallel agent work.",
@@ -557,6 +611,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			"Never ask a healthy running agent to stop or finalize merely because a wait timed out. Continue independent work or wait again; curtail an agent only when it is stuck, mis-scoped, or constrained by a user deadline.",
 			"Use agents action=read to retrieve a child's latest response again without restarting it, and action=interrupt to stop active work while preserving the conversation for follow-up.",
 			"Provider usage, quota, and rate limits pause children without discarding their conversations. After limits reset, use action=followup to resume a paused child instead of spawning a replacement or closing it.",
+			"Reload, quit, and session replacement checkpoint open child conversations and restore them hibernated with the same parent session. Use action=followup to resume work that was active before shutdown.",
 			"After collecting a child's final result, call agents with action=close when no further follow-up is needed; settled children hibernate but retain a conversation slot until closed.",
 			"Give concurrently writing child agents disjoint file scopes to avoid conflicting edits.",
 		],
@@ -675,6 +730,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 							else throw error;
 						}
 					} else await beginFollowUp();
+					persistAgentCheckpoint(agent);
 					updateOverlay();
 					const data = snapshot(agent);
 					const text = action === "message"
@@ -744,6 +800,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				if (agent.transitioning && !isActive(agent)) throw new Error(`Agent ${agent.name} is resuming; retry interrupt after startup settles`);
 				const wasActive = isActive(agent);
 				await interruptAgent(agent);
+				if (wasActive) persistAgentCheckpoint(agent);
 				const data = snapshot(agent);
 				const text = wasActive
 					? `Interrupted ${agent.name}; its conversation remains available for follow-up.`
@@ -754,6 +811,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				const agent = resolveAgent(String(params.agent_name ?? ""));
 				if (!agent) throw new Error(`Agent not found: ${params.agent_name ?? ""}`);
 				await closeAgent(agent);
+				agentPersistence.persistClosed(agent.id);
 				const data = snapshot(agent);
 				return { content: [{ type: "text", text: `Closed ${agent.name}.` }], details: { action: "close", agents: [data] } satisfies ToolDetails };
 			}
@@ -805,6 +863,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		mailboxListeners.clear();
 		sessionActive = true;
 		parentRunning = false;
+		restorePersistedAgents(ctx);
 		restoreMailboxFinals(ctx);
 		updateOverlay();
 		for (const event of mailbox.peek()) queueMicrotask(() => deliverMailboxEvent(event));
@@ -844,7 +903,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		activeMailboxAnchor = undefined;
 		for (const event of mailbox.peek()) queueMicrotask(() => deliverMailboxEvent(event));
 	});
-	pi.on("session_shutdown", async () => {
+	pi.on("session_shutdown", async (event) => {
 		sessionActive = false;
 		parentRunning = false;
 		generation += 1;
@@ -855,12 +914,20 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		mailboxListeners.clear();
 		const current = [...agents.values()];
 		for (const agent of current) agent.suppressNotifications = true;
-		const settled = await Promise.allSettled(current.map((agent) => closeAgent(agent, true)));
+		const settled = await Promise.allSettled(current.map(async (agent) => {
+			if (agent.status === "closed" || agent.cleanupComplete) return;
+			if (agent.status === "starting") {
+				await closeAgent(agent, true);
+				return;
+			}
+			await suspendAgent(agent, `parent session ${event.reason}`);
+			persistAgentCheckpoint(agent);
+		}));
 		const failures = settled
 			.filter((result): result is PromiseRejectedResult => result.status === "rejected")
 			.map((result) => result.reason);
 		agents.clear();
 		overlayCard.unregister();
-		if (failures.length > 0) throw new AggregateError(failures, "Failed to clean up one or more subagents");
+		if (failures.length > 0) throw new AggregateError(failures, "Failed to checkpoint one or more subagents");
 	});
 }

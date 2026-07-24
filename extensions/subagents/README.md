@@ -158,8 +158,8 @@ or `list` results and completion messages with `Ctrl+O` to see the child's rende
 
 ## Context and lifecycle
 
-Each child is a persistent `pi --mode rpc` subprocess backed by a temporary
-session:
+Each child is a persistent `pi --mode rpc` subprocess backed by a managed
+session under the Pi agent directory:
 
 - `fresh` (default) starts without parent conversation messages while retaining project instructions and runtime configuration.
 - `compacted` generates a concise parent-conversation summary before child startup. Concurrent spawns from the same parent position reuse one summary.
@@ -168,7 +168,7 @@ session:
 - The child runs in the same working directory and sees the same project files.
 - Child dialogs are cancelled because no interactive UI is attached to the RPC process.
 - Children can send bounded interim mailbox updates with `report_to_parent`; final responses are reported automatically.
-- Settled and interrupted children hibernate: their RPC process exits while the temporary session remains available.
+- Settled and interrupted children hibernate: their RPC process exits while the managed session remains available.
 - Provider usage, quota, and rate-limit errors settle as `paused`, not `failed`; the conversation remains available and a follow-up resumes it after limits reset.
 - A parent provider error does not cancel children. Because account quotas are commonly shared, children may independently pause when their own next provider request reaches the same limit.
 - Up to four queue-only messages remain pending on a hibernated child; a fifth is rejected until a follow-up delivers the queue.
@@ -176,7 +176,9 @@ session:
 - Concurrent `message`, `followup`, and `send` calls are dispatched one at a time per child in invocation order. A rejected dispatch cannot roll back or stop a later one; queue-only messages remain queued when the child is still idle at their turn.
 - `read` retrieves the latest response without waking a hibernated child.
 - `interrupt` aborts active work, hibernates the child, and preserves its session; `close` permanently removes it.
-- Session shutdown and `/reload` cancel pending spawns, terminate every child process tree, and remove temporary sessions.
+- Session shutdown, including `/reload`, quit, and session replacement, cancels pending spawns and safely stops every child process tree.
+- Open child checkpoints are stored in the parent session. Reloading or later resuming that same parent restores them hibernated; active children become `paused` and require an explicit follow-up.
+- Only `close` deletes a managed child session and writes a durable tombstone so later reloads cannot resurrect it.
 - A child cannot spawn grandchildren.
 
 Up to six child conversations may remain open at once. Capacity is reserved before

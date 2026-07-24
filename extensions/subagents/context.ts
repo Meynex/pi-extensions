@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { complete } from "@earendil-works/pi-ai/compat";
 import {
 	CURRENT_SESSION_VERSION,
@@ -18,12 +19,20 @@ const COMPACTED_CONTEXT_MAX_TOKENS = 8_192;
 export type ContextMode = "fresh" | "compacted" | "forked";
 export type CompactContext = (ctx: any, messages: any[], signal?: AbortSignal) => Promise<string>;
 
-export interface ContextFork {
-	directory: string;
-	sessionFile: string;
+export interface ContextForkState {
 	messageCount: number;
 	initialEntryCount: number;
+}
+
+export interface ContextFork extends ContextForkState {
+	directory: string;
+	sessionFile: string;
 	cleanup(): Promise<void>;
+}
+
+export interface ContextStorageOptions {
+	agentId: string;
+	root?: string;
 }
 
 function toolCallIds(message: any): Array<string | undefined> {
@@ -113,9 +122,63 @@ function appendInheritedMessage(session: SessionManager, message: any): void {
 	session.appendMessage(structuredClone(message));
 }
 
-export async function createContextFork(ctx: any, mode: ContextMode, compactedSummary?: string): Promise<ContextFork> {
-	const directory = await mkdtemp(join(tmpdir(), "pi-subagent-"));
+export function subagentSessionsRoot(): string {
+	const agentDirectory = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+	return join(agentDirectory, "subagents", "sessions");
+}
+
+function durableContextDirectory(ctx: any, options: ContextStorageOptions): string {
+	const parentId = String(ctx.sessionManager.getSessionId());
+	const parentKey = createHash("sha256").update(parentId).digest("hex").slice(0, 32);
+	const agentKey = createHash("sha256").update(options.agentId).digest("hex").slice(0, 32);
+	return join(options.root ?? subagentSessionsRoot(), parentKey, agentKey);
+}
+
+function contextFork(directory: string, state: ContextForkState): ContextFork {
 	let cleanupPromise: Promise<void> | undefined;
+	return {
+		directory,
+		sessionFile: join(directory, "context.jsonl"),
+		...state,
+		cleanup() {
+			if (!cleanupPromise) {
+				cleanupPromise = rm(directory, { recursive: true, force: true }).catch((error) => {
+					cleanupPromise = undefined;
+					throw error;
+				});
+			}
+			return cleanupPromise;
+		},
+	};
+}
+
+export function restoreContextFork(
+	ctx: any,
+	agentId: string,
+	state: ContextForkState,
+	root?: string,
+): ContextFork | undefined {
+	const directory = durableContextDirectory(ctx, { agentId, root });
+	const sessionFile = join(directory, "context.jsonl");
+	if (!existsSync(sessionFile)) return undefined;
+	return contextFork(directory, state);
+}
+
+export async function createContextFork(
+	ctx: any,
+	mode: ContextMode,
+	compactedSummary?: string,
+	storage?: ContextStorageOptions,
+): Promise<ContextFork> {
+	const directory = storage
+		? durableContextDirectory(ctx, storage)
+		: await mkdtemp(join(tmpdir(), "pi-subagent-"));
+	let ownsDirectory = !storage;
+	if (storage) {
+		await mkdir(dirname(directory), { recursive: true, mode: 0o700 });
+		await mkdir(directory, { mode: 0o700 });
+		ownsDirectory = true;
+	}
 	try {
 		const context = buildSessionContext(
 			ctx.sessionManager.getEntries(),
@@ -123,6 +186,7 @@ export async function createContextFork(ctx: any, mode: ContextMode, compactedSu
 		);
 		const parentSession = ctx.sessionManager.getSessionFile();
 		const sessionFile = join(directory, "context.jsonl");
+		if (existsSync(sessionFile)) throw new Error("Subagent context already exists");
 		await writeFile(sessionFile, `${JSON.stringify({
 			type: "session",
 			version: CURRENT_SESSION_VERSION,
@@ -143,23 +207,12 @@ export async function createContextFork(ctx: any, mode: ContextMode, compactedSu
 				false,
 			);
 		}
-		return {
-			directory,
-			sessionFile,
+		return contextFork(directory, {
 			messageCount: messages.length + (mode === "compacted" && compactedSummary?.trim() ? 1 : 0),
 			initialEntryCount: session.getEntries().length,
-			cleanup() {
-				if (!cleanupPromise) {
-					cleanupPromise = rm(directory, { recursive: true, force: true }).catch((error) => {
-						cleanupPromise = undefined;
-						throw error;
-					});
-				}
-				return cleanupPromise;
-			},
-		};
+		});
 	} catch (error) {
-		await rm(directory, { recursive: true, force: true });
+		if (ownsDirectory) await rm(directory, { recursive: true, force: true });
 		throw error;
 	}
 }
