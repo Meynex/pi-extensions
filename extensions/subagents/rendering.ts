@@ -1,5 +1,5 @@
 import { getMarkdownTheme, SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Text, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { Container, Markdown, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { fitToolLine, formatElapsed } from "../better-native-pi/core.js";
 import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js";
 import type { TranscriptEntry } from "../transcript/pager.js";
@@ -259,26 +259,34 @@ function toolHeadline(partial: boolean, isError: boolean, verb: string, detail: 
 	return `${mark} ${BOLD}${verb}${RESET}${detail ? ` ${detail}` : ""}`;
 }
 
-function actionVerb(action: unknown, partial: boolean, details?: ToolDetails): string {
-	if (action === "spawn") return partial ? "Spawning agent" : "Spawned agent";
-	if (action === "send" || action === "followup") return partial ? "Sending follow-up" : "Sent follow-up";
-	if (action === "message") return partial ? "Queueing agent message" : "Queued agent message";
+function actionAgentName(action: unknown, args?: Record<string, unknown>, details?: ToolDetails): string {
+	const supplied = action === "spawn" ? args?.name : args?.agent_name;
+	const fallback = details?.agents?.length === 1 ? details.agents[0].name : "";
+	return compact(String(supplied ?? fallback ?? ""), 48);
+}
+
+function actionVerb(action: unknown, partial: boolean, theme: any, args?: Record<string, unknown>, details?: ToolDetails): string {
+	const name = actionAgentName(action, args, details);
+	const identity = name ? theme.fg("mdHeading", name) : "";
+	if (action === "spawn") return `${partial ? "Spawning" : "Spawned"} agent${identity ? ` ${identity}` : ""}`;
+	if (action === "send" || action === "followup") return `${partial ? "Sending" : "Sent"} follow-up${identity ? ` to ${identity}` : ""}`;
+	if (action === "message") return `${partial ? "Queueing" : "Queued"} message${identity ? ` for ${identity}` : ""}`;
 	if (action === "wait") {
 		if (!partial && details?.interrupted) return "Wait interrupted";
 		if (!partial && details?.timedOut) return "Agents still running";
 		return partial ? "Waiting for agents" : "Waited for agents";
 	}
 	if (action === "list") return partial ? "Listing agents" : "Listed agents";
-	if (action === "read") return partial ? "Reading agent" : "Read agent";
-	if (action === "interrupt") return partial ? "Interrupting agent" : "Interrupted agent";
-	if (action === "close") return partial ? "Closing agent" : "Closed agent";
+	if (action === "read") return `${partial ? "Reading" : "Read"} agent${identity ? ` ${identity}` : ""}`;
+	if (action === "interrupt") return `${partial ? "Interrupting" : "Interrupted"} agent${identity ? ` ${identity}` : ""}`;
+	if (action === "close") return `${partial ? "Closing" : "Closed"} agent${identity ? ` ${identity}` : ""}`;
 	return partial ? "Using agents" : "Used agents";
 }
 
 function actionDetail(args: Record<string, unknown> | undefined): string {
 	if (!args) return "";
 	if (args.action === "spawn") return compact(String(args.task ?? ""), 180);
-	if (args.action === "send" || args.action === "followup" || args.action === "message") return [compact(String(args.agent_name ?? ""), 48), compact(String(args.message ?? ""), 120)].filter(Boolean).join(" · ");
+	if (args.action === "send" || args.action === "followup" || args.action === "message") return compact(String(args.message ?? ""), 120);
 	if (args.action === "wait") {
 		const names = Array.isArray(args.agent_names) && args.agent_names.length ? args.agent_names.join(", ") : "running agents";
 		const returnWhen = args.return_when === "any" ? "first mailbox update" : args.return_when === "all" ? "all completions" : "";
@@ -289,19 +297,20 @@ function actionDetail(args: Record<string, unknown> | undefined): string {
 		return [compact(names, 120), returnWhen, wakeOn, timeout].filter(Boolean).join(" · ");
 	}
 	if (args.action === "list") return "current session";
-	return compact(String(args.agent_name ?? ""), 80);
+	return "";
 }
 
 function reasoningDetail(args: Record<string, unknown> | undefined, theme: any, partial: boolean): string {
 	const reasoning = compact(String(args?.reasoning ?? ""), 100);
-	if (reasoning) return theme.fg("accent", reasoning);
+	if (reasoning) return `${theme.fg("dim", "to")} ${theme.fg("accent", reasoning)}`;
 	return partial ? theme.fg("dim", "…") : "";
 }
 
-function agentSummary(agent: AgentSnapshot, theme: any): string {
+function agentSummary(agent: AgentSnapshot, theme: any, includeIdentity = true): string {
 	const mark = theme.fg(statusColor(agent.status), statusSymbol(agent.status));
-	const identity = theme.fg("text", theme.bold(agent.name ?? "unnamed agent"));
 	const metadata = `${theme.fg("muted", `${agent.contextMode} context`)} · ${theme.fg(statusColor(agent.status), agent.status)}`;
+	if (!includeIdentity) return `${mark} ${metadata}`;
+	const identity = theme.fg("text", theme.bold(agent.name ?? "unnamed agent"));
 	return `${mark} ${identity} · ${metadata}`;
 }
 
@@ -320,6 +329,10 @@ function detailPrefix(label: DetailLabel, theme: any, indent = TOOL_INDENT, fail
 	return `${indent}${theme.fg(labelColor, label.padEnd(6))}  `;
 }
 
+function detailContentColor(label: DetailLabel): string {
+	return label === "prompt" || label === "usage" ? "dim" : label === "error" ? "error" : "text";
+}
+
 function detailLine(
 	label: DetailLabel,
 	content: string,
@@ -328,10 +341,23 @@ function detailLine(
 	indent = TOOL_INDENT,
 	failed = false,
 ): string {
-	const contentColor = label === "prompt" || label === "usage" ? "dim" : label === "error" ? "error" : "text";
 	const prefix = detailPrefix(label, theme, indent, failed);
 	const contentWidth = Math.max(1, width - visibleWidth(prefix));
-	return `${prefix}${theme.fg(contentColor, truncateToWidth(content, contentWidth, "…"))}`;
+	return `${prefix}${theme.fg(detailContentColor(label), truncateToWidth(content, contentWidth, "…"))}`;
+}
+
+function expandedDetailLines(label: DetailLabel, content: string, width: number, theme: any): string[] {
+	const prefix = detailPrefix(label, theme);
+	const contentWidth = Math.max(1, width - visibleWidth(prefix));
+	const continuation = " ".repeat(visibleWidth(prefix));
+	const rows = sanitizeTerminal(content)
+		.replace(/\r\n?/g, "\n")
+		.split("\n")
+		.flatMap((line) => {
+			const wrapped = wrapTextWithAnsi(line, contentWidth);
+			return wrapped.length > 0 ? wrapped : [""];
+		});
+	return rows.map((line, index) => `${index === 0 ? prefix : continuation}${theme.fg(detailContentColor(label), line)}`);
 }
 
 function expandedResultLines(agent: AgentSnapshot, width: number, theme: any): string[] {
@@ -351,10 +377,15 @@ function agentBodyLines(
 	agent: AgentSnapshot,
 	width: number,
 	theme: any,
-	options: { prompt?: string; showResult?: boolean; showUsage?: boolean; expanded?: boolean } = {},
+	options: { prompt?: string; promptLabel?: "prompt" | "message"; showResult?: boolean; showUsage?: boolean; expanded?: boolean; includeIdentity?: boolean } = {},
 ): string[] {
-	const lines = [`${theme.fg("dim", TOOL_BRANCH)}${agentSummary(agent, theme)}`];
-	if (options.prompt) lines.push(detailLine("prompt", compact(options.prompt, 240), width, theme));
+	const lines = [`${theme.fg("dim", TOOL_BRANCH)}${agentSummary(agent, theme, options.includeIdentity ?? true)}`];
+	if (options.prompt) {
+		const label = options.promptLabel ?? "prompt";
+		lines.push(...(options.expanded
+			? expandedDetailLines(label, options.prompt, width, theme)
+			: [detailLine(label, compact(options.prompt, 240), width, theme)]));
+	}
 	if (options.showResult && agent.output) {
 		lines.push(...(options.expanded
 			? expandedResultLines(agent, width, theme)
@@ -384,7 +415,7 @@ export function renderAgentCall(args: Record<string, unknown>, theme: any, conte
 	component.update((width) => {
 		const detail = actionDetail(args);
 		return [
-			toolHeadline(true, false, actionVerb(args.action, true), reasoningDetail(args, theme, true)),
+			toolHeadline(true, false, actionVerb(args.action, true, theme, args), reasoningDetail(args, theme, true)),
 			...(detail ? [args.action === "spawn"
 				? detailLine("prompt", detail, width, theme, theme.fg("dim", TOOL_BRANCH))
 				: `${TOOL_BRANCH}${theme.fg("text", detail)}`] : []),
@@ -411,25 +442,35 @@ export function renderAgentResult(result: any, options: ToolRenderOptions, theme
 		const visibleAgents = details?.agents?.filter((agent) => !alreadyReported.has(agent.id)) ?? [];
 		const mailboxMessages = details?.mailbox?.filter((event) => event.kind === "message") ?? [];
 		if (action === "wait" && details?.agents?.length && visibleAgents.length === 0 && mailboxMessages.length === 0) return [];
-		const lines = [toolHeadline(false, false, actionVerb(action, false, details), reasoningDetail(args, theme, false))];
+		const lines = [toolHeadline(false, false, actionVerb(action, false, theme, args, details), reasoningDetail(args, theme, false))];
 		for (const event of mailboxMessages) lines.push(...mailboxEventLines(event, width, theme));
 		if (visibleAgents.length === 0) {
 			if (mailboxMessages.length === 0) lines.push(`${TOOL_BRANCH}${theme.fg("dim", action === "wait" ? "no running agents" : "no agents in this session")}`);
 			return lines;
 		}
+		const headlineIdentifiesAgent = action === "spawn"
+			|| action === "send"
+			|| action === "followup"
+			|| action === "message"
+			|| action === "read"
+			|| action === "interrupt"
+			|| action === "close";
 		for (const agent of visibleAgents) {
 			const completed = isSettled(agent);
+			const isMessageAction = action === "send" || action === "followup" || action === "message";
 			const prompt = action === "close"
 				? undefined
-				: action === "send" || action === "followup" || action === "message"
-					? compact(String(args?.message ?? ""), 240)
+				: isMessageAction
+					? String(args?.message ?? "")
 					: agent.task;
 			const showsCompletion = (action === "wait" || action === "list" || action === "read") && completed;
 			lines.push(...agentBodyLines(agent, width, theme, {
 				prompt,
+				promptLabel: isMessageAction ? "message" : "prompt",
 				showResult: showsCompletion,
 				showUsage: showsCompletion,
 				expanded: Boolean(options?.expanded),
+				includeIdentity: !headlineIdentifiesAgent,
 			}));
 		}
 		return lines;

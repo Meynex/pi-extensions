@@ -194,7 +194,7 @@ const renderTheme = {
 
 const semanticTheme = {
 	fg(color: string, text: string) {
-		const codes: Record<string, number> = { accent: 35, success: 32, error: 31, warning: 33, muted: 90, dim: 2, text: 39, toolTitle: 36 };
+		const codes: Record<string, number> = { accent: 35, success: 32, error: 31, warning: 33, muted: 90, dim: 2, text: 39, toolTitle: 36, mdHeading: 36 };
 		return `\x1b[${codes[color] ?? 39}m${text}\x1b[0m`;
 	},
 	bold: (text: string) => text,
@@ -416,10 +416,10 @@ describe("subagents", () => {
 		const args = { reasoning: "Delegate repository inspection", action: "spawn", task: "Inspect the repository", name: "repository inspector" };
 		const call = harness.tool.renderCall(args, renderTheme, { isPartial: true, args });
 		expect(rendered(call)).toEqual([
-			"• Spawning agent Delegate repository inspection",
+			"• Spawning agent repository inspector to Delegate repository inspection",
 			"  └ prompt  Inspect the repository",
 		]);
-		expect(call.render(100)[0]).toContain("\x1b[35m•\x1b[0m \x1b[1mSpawning agent\x1b[0m");
+		expect(call.render(100)[0]).toContain("\x1b[35m•\x1b[0m \x1b[1mSpawning agent repository inspector\x1b[0m");
 		expect(rendered(harness.tool.renderCall(args, renderTheme, { isPartial: false, args }))).toEqual([]);
 
 		const result = await harness.tool.execute("spawn", args, undefined, undefined, harness.ctx);
@@ -430,9 +430,12 @@ describe("subagents", () => {
 		});
 		expect(settled).toBe(call);
 		const lines = rendered(settled);
-		expect(lines[0]).toBe("• Spawned agent Delegate repository inspection");
-		expect(settled.render(100)[0]).toContain("\x1b[32m•\x1b[0m \x1b[1mSpawned agent\x1b[0m");
-		expect(lines[1]).toBe("  └ ● repository inspector · fresh context · running");
+		expect(lines[0]).toBe("• Spawned agent repository inspector to Delegate repository inspection");
+		expect(settled.render(100)[0]).toContain("\x1b[32m•\x1b[0m \x1b[1mSpawned agent repository inspector\x1b[0m");
+		const styledHeadline = harness.tool.renderResult(result, { isPartial: false, expanded: false }, semanticTheme, { args }).render(100)[0];
+		expect(styledHeadline).toContain("\x1b[36mrepository inspector\x1b[0m");
+		expect(styledHeadline).toContain("\x1b[2mto\x1b[0m \x1b[35mDelegate repository inspection\x1b[0m");
+		expect(lines[1]).toBe("  └ ● fresh context · running");
 		expect(lines.join("\n")).not.toContain(result.details.agents[0].id);
 		expect(lines[2]).toBe("    prompt  Inspect the repository");
 		expect(lines.join("\n")).not.toMatch(/\b\d+ms\b/);
@@ -447,7 +450,8 @@ describe("subagents", () => {
 		harness.clients[0].complete("API review complete.");
 		const waited = await waiting;
 		const collapsed = rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: false }, renderTheme, { args: waitArgs }));
-		expect(collapsed[0]).toBe("• Waited for agents Collect delegated review");
+		expect(collapsed[0]).toBe("• Waited for agents to Collect delegated review");
+		expect(collapsed[1]).toContain(first.details.agents[0].name);
 		expect(collapsed[2]).toBe("    prompt  Inspect API");
 		expect(collapsed[3]).toBe("    result  API review complete.");
 		expect(collapsed[4]).toContain("    usage   1 turn · ↑10 · ↓5 · R2 · W3 · $0.0100 · test-provider/test-model");
@@ -462,7 +466,7 @@ describe("subagents", () => {
 		const timeoutArgs = { reasoning: "Check slow task", action: "wait", agent_names: [second.details.agents[0].name], timeout_ms: 0 };
 		const timeout = await harness.tool.execute("timeout", timeoutArgs, undefined, undefined, harness.ctx);
 		const timedOut = rendered(harness.tool.renderResult(timeout, { isPartial: false, expanded: false }, renderTheme, { args: timeoutArgs }));
-		expect(timedOut[0]).toBe("• Agents still running Check slow task");
+		expect(timedOut[0]).toBe("• Agents still running to Check slow task");
 		expect(timedOut.join("\n")).toContain("running");
 		expect(timeout.content[0].text).toStartWith("No mailbox update arrived during this wait interval.\nAgents continue running and updates remain queued without forcing a parent turn. Do not ask healthy running agents to stop or finalize because of this timeout.\n");
 
@@ -473,7 +477,7 @@ describe("subagents", () => {
 			{ args: { reasoning: "Redirect delegated work", action: "send" }, isError: true },
 		));
 		expect(failed).toEqual([
-			"• Agent action failed Redirect delegated work",
+			"• Agent action failed to Redirect delegated work",
 			"  └ Subagent not found",
 		]);
 	});
@@ -612,26 +616,58 @@ describe("subagents", () => {
 		const lines = rendered(harness.tool.renderResult(started, { isPartial: false, expanded: false }, renderTheme, {
 			args: { action: "spawn", task: "Review the renderer", name: "renderer review" },
 		}));
-		expect(lines[0]).toBe("• Spawned agent");
-		expect(lines[1]).toBe("  └ ● renderer review · fresh context · running");
+		expect(lines[0]).toBe("• Spawned agent renderer review");
+		expect(lines[1]).toBe("  └ ● fresh context · running");
 		expect(lines.join("\n")).not.toContain(agent.id);
 		expect(lines[2]).toBe("    prompt  Review the renderer");
 		const styled = harness.tool.renderResult(started, { isPartial: false, expanded: false }, semanticTheme, {
 			args: { action: "spawn", task: "Review the renderer", name: "renderer review" },
 		}).render(100);
-		expect(styled[1]).toContain("\x1b[35m●\x1b[0m \x1b[39mrenderer review\x1b[0m");
+		expect(styled[1]).toContain("\x1b[35m●\x1b[0m \x1b[90mfresh context\x1b[0m");
+		expect(styled[1]).not.toContain("renderer review");
 		expect(styled[1]).toContain("\x1b[35mrunning\x1b[0m");
 		expect(styled[2]).toContain("\x1b[90mprompt\x1b[0m  \x1b[2mReview the renderer\x1b[0m");
 		const sendArgs = { reasoning: "Refine delegated review", action: "send", agent_name: agent.name, message: "Check tests too" };
 		const sent = await harness.tool.execute("send", sendArgs, undefined, undefined, harness.ctx);
 		expect(harness.clients[0].steering).toEqual(["Check tests too"]);
 		const sentLines = rendered(harness.tool.renderResult(sent, { isPartial: false, expanded: false }, renderTheme, { args: sendArgs }));
-		expect(sentLines[2]).toBe("    prompt  Check tests too");
+		expect(sentLines[0]).toBe("• Sent follow-up to renderer review to Refine delegated review");
+		expect(sentLines[2]).toBe("    message  Check tests too");
 		const closeArgs = { reasoning: "Release delegated reviewer", action: "close", agent_name: agent.name };
 		const closed = await harness.tool.execute("close", closeArgs, undefined, undefined, harness.ctx);
 		const closedLines = rendered(harness.tool.renderResult(closed, { isPartial: false, expanded: false }, renderTheme, { args: closeArgs }));
 		expect(closedLines).toHaveLength(2);
-		expect(closedLines[1]).toContain("closed");
+		expect(closedLines[0]).toBe("• Closed agent renderer review to Release delegated reviewer");
+		expect(closedLines[1]).toBe("  └ ■ fresh context · closed");
+	});
+
+	test("shows concise outbound previews and complete expanded communications", async () => {
+		const harness = createHarness();
+		const task = `Inspect the integration. ${"task-detail ".repeat(30)}\n\nTASK-END`;
+		const spawnArgs = { reasoning: "Delegate integration audit", action: "spawn", task, name: "integration auditor" };
+		const started = await harness.tool.execute("spawn-expanded", spawnArgs, undefined, undefined, harness.ctx);
+		const collapsedTask = rendered(harness.tool.renderResult(started, { isPartial: false, expanded: false }, renderTheme, { args: spawnArgs }), 64);
+		expect(collapsedTask).toHaveLength(3);
+		expect(collapsedTask[2]).toStartWith("    prompt  Inspect the integration.");
+		expect(collapsedTask.join("\n")).not.toContain("TASK-END");
+		const expandedTask = rendered(harness.tool.renderResult(started, { isPartial: false, expanded: true }, renderTheme, { args: spawnArgs }), 64);
+		expect(expandedTask).toContain(`${" ".repeat(12)}TASK-END`);
+		expect(expandedTask.every((line) => visibleWidth(line) <= 64)).toBe(true);
+
+		const message = `Root configuration is ready. ${"message-detail ".repeat(30)}\n\nMESSAGE-END`;
+		const messageArgs = { reasoning: "Share integration context", action: "message", agent_name: "integration auditor", message };
+		const queued = await harness.tool.execute("message-expanded", messageArgs, undefined, undefined, harness.ctx);
+		expect(harness.clients[0].steering).toEqual([message]);
+		const collapsedMessage = rendered(harness.tool.renderResult(queued, { isPartial: false, expanded: false }, renderTheme, { args: messageArgs }), 100);
+		expect(collapsedMessage).toHaveLength(3);
+		expect(collapsedMessage[0]).toBe("• Queued message for integration auditor to Share integration context");
+		expect(collapsedMessage[2]).toStartWith("    message  Root configuration is ready.");
+		expect(collapsedMessage.join("\n")).not.toContain("MESSAGE-END");
+		const expandedMessage = rendered(harness.tool.renderResult(queued, { isPartial: false, expanded: true }, renderTheme, { args: messageArgs }), 100);
+		expect(expandedMessage[0]).toBe("• Queued message for integration auditor to Share integration context");
+		expect(expandedMessage).toContain(`${" ".repeat("    message  ".length)}MESSAGE-END`);
+		expect(expandedMessage.join("\n")).not.toContain("…");
+		expect(expandedMessage.every((line) => visibleWidth(line) <= 100)).toBe(true);
 	});
 
 	test("requires unique case-insensitive names across concurrent and closed agents", async () => {
@@ -1321,7 +1357,7 @@ setInterval(() => {}, 1000);
 		expect(result.content[0].text).toContain("Reusable final response");
 		expect(result.details.agents[0]).toMatchObject({ status: "completed", output: "Reusable final response" });
 		const lines = rendered(harness.tool.renderResult(result, { isPartial: false, expanded: false }, renderTheme, { args }));
-		expect(lines[0]).toBe("• Read agent Recall delegated result");
+		expect(lines[0]).toBe(`• Read agent ${name} to Recall delegated result`);
 		expect(lines.join("\n")).toContain("result  Reusable final response");
 		expect(harness.clients).toHaveLength(1);
 		expect(harness.clients[0].stopped).toBe(true);
@@ -1336,8 +1372,8 @@ setInterval(() => {}, 1000);
 		const interrupted = await harness.tool.execute("interrupt", args, undefined, undefined, harness.ctx);
 		expect(interrupted.details.agents[0].status).toBe("interrupted");
 		const lines = rendered(harness.tool.renderResult(interrupted, { isPartial: false, expanded: false }, renderTheme, { args }));
-		expect(lines[0]).toBe("• Interrupted agent Stop broad investigation");
-		expect(lines[1]).toContain(`↯ ${name} · fresh context · interrupted`);
+		expect(lines[0]).toBe(`• Interrupted agent ${name} to Stop broad investigation`);
+		expect(lines[1]).toBe("  └ ↯ fresh context · interrupted");
 		expect(harness.clients[0].abortCalls).toBe(1);
 		expect(harness.clients[0].stopped).toBe(true);
 		expect(existsSync(originalSession)).toBe(true);

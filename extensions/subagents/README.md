@@ -94,8 +94,20 @@ Waited and automatic completions share the exact same body.
     usage   2 turns · ↑18k · ↓1.2k · R31k · $0.0842 · provider/model
 ```
 
-Spawn cards show identity and prompt. Message and follow-up cards show identity
-and their supplied text. Read cards show the latest result and usage. Interrupt and close cards show
+Action headlines identify both the target and purpose, for example `Spawned agent
+api-review to inspect API`, `Queued message for api-review to share integration
+context`, `Waited for agents to collect reviews`, and `Closed agent api-review to
+release the reviewer`. Single-agent action bodies omit the repeated name and show
+only context, status, and action details. Multi-agent `wait` and `list` bodies,
+mailbox batches, and automatic completions retain names where the headline does
+not identify one child. Spawn cards show identity and a concise prompt preview.
+Message and follow-up cards show identity, label the exact child-bound payload as
+`message`, and keep a concise preview while collapsed. Expand a card with
+`Ctrl+O` to inspect the full supplied prompt or message with line wrapping and no
+content truncation. In the headline, the agent name uses the theme's
+`mdHeading` identity color, the `to` connector is dim, and `<reason>` is
+accented, matching the other tool renderers. This purpose phrase is parent-only;
+it is not part of the payload delivered to the child. Read cards show the latest result and usage. Interrupt and close cards show
 identity only, avoiding repeated historical details.
 
 In TUI mode, actively running children also appear in the shared top-right
