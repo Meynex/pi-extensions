@@ -2,10 +2,17 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadTitleModelConfig, titleModelConfigPath } from "./index";
+import { loadTitleModelConfig, TITLE_SYSTEM_PROMPT, titleModelConfigPath } from "./index";
 import { requestTitleCompletion } from "./request";
 
 describe("auto-session-title model requests", () => {
+	test("titles the durable project instead of its latest component", () => {
+		expect(TITLE_SYSTEM_PROMPT).toContain("A component remains subordinate even when discussed for several turns");
+		expect(TITLE_SYSTEM_PROMPT).toContain("title that complete durable focus at the same scope");
+		expect(TITLE_SYSTEM_PROMPT).toContain("Never preserve it when it names only a component of focus_summary");
+		expect(TITLE_SYSTEM_PROMPT).toContain('A session building Meridian Sync remains "Meridian Sync" while discussing its revision DAG, RPC layer, and notification WebSockets');
+	});
+
 	test("reads model config from the configured Pi agent directory", () => {
 		const directory = mkdtempSync(join(tmpdir(), "pi-auto-title-test-"));
 		const previous = process.env.PI_CODING_AGENT_DIR;

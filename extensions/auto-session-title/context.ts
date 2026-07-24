@@ -23,6 +23,7 @@ export interface BootstrapTurn {
 }
 
 export interface TitleContext {
+	sessionAnchor?: string;
 	previousFocus?: string;
 	recentTurnSummaries: string[];
 	bootstrapPriorTurns: BootstrapTurn[];
@@ -151,6 +152,7 @@ export function buildTitleContext(entries: readonly any[], provisionalUser?: str
 	}));
 
 	return {
+		sessionAnchor: clip(states[0]?.focusSummary, MAX_FOCUS_SUMMARY_CHARS),
 		previousFocus: clip(latestState?.focusSummary, MAX_FOCUS_SUMMARY_CHARS),
 		recentTurnSummaries: states
 			.slice(-MAX_RECENT_TURN_SUMMARIES)
@@ -171,6 +173,7 @@ export function titleContextHasContent(context: TitleContext): boolean {
 	return Boolean(
 		context.currentUserRequest
 		|| context.currentAssistantOutcome
+		|| context.sessionAnchor
 		|| context.previousFocus
 		|| context.recentTurnSummaries.length > 0
 		|| context.bootstrapPriorTurns.length > 0
@@ -181,6 +184,7 @@ export function buildTitlePrompt(project: string, previousTitle: string | undefi
 	const prompt = JSON.stringify({
 		project: clip(project, 200),
 		previous_session_title: clip(previousTitle, 72) ?? null,
+		session_anchor: context.sessionAnchor ?? null,
 		previous_focus: context.previousFocus ?? null,
 		recent_turn_summaries: context.recentTurnSummaries,
 		bootstrap_prior_turns: context.bootstrapPriorTurns,

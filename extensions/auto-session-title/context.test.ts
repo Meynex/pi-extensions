@@ -41,11 +41,46 @@ describe("auto-session-title context", () => {
 			{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "Updated the Mistral web-search extension and pushed the change." }] } },
 		];
 		const context = buildTitleContext(entries);
+		expect(context.sessionAnchor).toBe("Focus 0");
 		expect(context.previousFocus).toBe("Focus 9");
 		expect(context.recentTurnSummaries).toEqual(Array.from({ length: 8 }, (_, index) => `Turn ${index + 2}`));
 		expect(context.currentUserRequest).toBe("Remove descriptions and dedupe snippets.");
 		expect(context.currentAssistantOutcome).toBe("Updated the Mistral web-search extension and pushed the change.");
 		expect(latestTitleState(entries)?.title).toBe("Title 9");
+	});
+
+	test("keeps the original objective when recent state narrows to a component", () => {
+		const entries = [
+			{
+				type: "custom",
+				customType: TITLE_STATE_TYPE,
+				data: {
+					version: 2,
+					turnSummary: "Designed a self-hosted Obsidian vault synchronization system.",
+					focusSummary: "Building Meridian, a self-hosted Obsidian vault synchronization system.",
+					title: "Meridian Sync",
+					createdAt: "2026-07-24T16:29:23.387Z",
+				},
+			},
+			{
+				type: "custom",
+				customType: TITLE_STATE_TYPE,
+				data: {
+					version: 2,
+					turnSummary: "Explained reconnectable WebSocket cursor notifications.",
+					focusSummary: "Meridian's persistent WebSocket notification layer.",
+					title: "Notification Sessions",
+					createdAt: "2026-07-24T16:40:34.818Z",
+				},
+			},
+		];
+		const context = buildTitleContext(entries);
+		expect(context.sessionAnchor).toBe("Building Meridian, a self-hosted Obsidian vault synchronization system.");
+		expect(context.previousFocus).toBe("Meridian's persistent WebSocket notification layer.");
+		expect(JSON.parse(buildTitlePrompt("meridian", "Notification Sessions", context))).toMatchObject({
+			session_anchor: "Building Meridian, a self-hosted Obsidian vault synchronization system.",
+			previous_focus: "Meridian's persistent WebSocket notification layer.",
+		});
 	});
 
 	test("keeps provisional first prompts out of completed assistant context", () => {
