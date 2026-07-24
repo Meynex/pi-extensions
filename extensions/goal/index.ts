@@ -1359,7 +1359,6 @@ export default function (pi: ExtensionAPI) {
 			noToolContinuationStreak = 0;
 			saveAndEmit(ctx);
 			appendGoalContext();
-			ctx.ui.notify(`${replacing ? "Replaced" : "Set"} session goal: ${objective}`, "info");
 			// Kick the auto-continuation loop. maybeContinue is a no-op unless the
 			// thread is idle, so during a tool call this typically just primes state;
 			// the agent_settled handler fires the first continuation at a safe boundary.

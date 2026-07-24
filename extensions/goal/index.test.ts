@@ -548,6 +548,7 @@ test("goal_set is always available and sets a fresh active goal", async () => {
 	expect(h.activeTools.has("goal_set")).toBe(true);
 	expect(h.activeTools.has("goal_complete")).toBe(false);
 	expect(h.activeTools.has("goal_block")).toBe(false);
+	const notificationsBeforeSet = h.notifications.length;
 
 	// Setting a goal activates the loop tools and starts the loop.
 	await h.tools.goal_set.execute("call", {
@@ -564,6 +565,7 @@ test("goal_set is always available and sets a fresh active goal", async () => {
 	expect(sentMessages(h, "goal-context")[0]!.message.content).toContain("make all tests pass");
 	expect(sentMessages(h, "goal-continuation")).toHaveLength(1);
 	expect(sentMessages(h, "goal-continuation")[0]!.message.content).toBe("Goal continuation requested.");
+	expect(h.notifications).toHaveLength(notificationsBeforeSet);
 });
 
 test("goal_set refuses to silently overwrite an in-progress goal", async () => {
