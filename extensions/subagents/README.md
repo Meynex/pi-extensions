@@ -83,8 +83,10 @@ progress, success, or error color; the verb is neutral bold text; and only the
 reasoning phrase uses the theme accent. Agent names are neutral bold text, prompt
 labels and metadata recede, prompt text and usage values stay dim, and the
 `result` label carries success or error color while result text remains readable.
-Identity and status come first, followed by prompt, result preview, and usage.
-Waited and automatic completions share the exact same body.
+Identity and status come first, followed by prompt, a bounded result preview, and
+usage. Long results use the same five-row tail collapse as bash output, including
+a `Ctrl+O` omission hint. Waited and automatic completions share the exact same
+body.
 
 ```text
 • Agent completed
@@ -144,9 +146,12 @@ starts at the latest entry; scroll up to pause tail-following or press End to
 resume it. Inherited parent context is omitted so the transcript begins with the
 delegated task.
 
-Collapsed rows show the child name, context mode, status, prompt, and a one-line
-result preview when available. Prompt always precedes result, and
-completed runs always show turns, tokens, cost, and model on the final usage row.
+Collapsed rows show the child name, context mode, status, prompt, and result when
+available. Results up to five rendered rows remain visible. Longer results keep
+the latest four rows below an omission hint, matching bash output collapse.
+`Ctrl+O` expands the complete Markdown-rendered result. Prompt always precedes
+result, and completed runs always show turns, tokens, cost, and model on the final
+usage row.
 Each billed child response also writes a durable parent-session usage record.
 The footer folds those input, output, cache, and cost values directly into the
 session totals, including after reload, without showing a separate child subtotal.

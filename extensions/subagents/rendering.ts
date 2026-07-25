@@ -14,7 +14,7 @@ export const MAILBOX_HISTORY_ENTRY_TYPE = "subagent-mailbox-history";
 
 const TOOL_OUTPUT_BYTES = 48 * 1024;
 const MAX_REPORT_CHARS = 4_000;
-const RESULT_PREVIEW_CHARS = 180;
+const COLLAPSED_RESULT_ROWS = 5;
 const TOOL_BRANCH = "  └ ";
 const TOOL_INDENT = "    ";
 const OVERLAY_MAX_ROWS = 10;
@@ -367,6 +367,31 @@ function expandedDetailLines(label: DetailLabel, content: string, width: number,
 	return rows.map((line, index) => `${index === 0 ? prefix : continuation}${theme.fg(detailContentColor(label), line)}`);
 }
 
+function collapsedResultLines(agent: AgentSnapshot, width: number, theme: any): string[] {
+	if (!agent.output) return [];
+	const prefix = detailPrefix("result", theme, TOOL_INDENT, agent.status === "failed");
+	const contentWidth = Math.max(1, width - visibleWidth(prefix));
+	const continuation = " ".repeat(visibleWidth(prefix));
+	const rows = sanitizeTerminal(agent.output)
+		.replace(/\r\n?/g, "\n")
+		.replace(/\s+$/, "")
+		.split("\n")
+		.flatMap((line) => {
+			const wrapped = wrapTextWithAnsi(line, contentWidth);
+			return wrapped.length > 0 ? wrapped : [""];
+		});
+	const overflow = rows.length > COLLAPSED_RESULT_ROWS;
+	const visibleRows = overflow ? rows.slice(-(COLLAPSED_RESULT_ROWS - 1)) : rows;
+	const outputRows = visibleRows.map((content) => ({ content, color: "text" as const }));
+	const rendered = overflow
+		? [{
+			content: `… +${rows.length - visibleRows.length} earlier lines (Ctrl+O for full output)`,
+			color: "dim" as const,
+		}, ...outputRows]
+		: outputRows;
+	return rendered.map((row, index) => `${index === 0 ? prefix : continuation}${theme.fg(row.color, row.content)}`);
+}
+
 function expandedResultLines(agent: AgentSnapshot, width: number, theme: any): string[] {
 	if (!agent.output) return [];
 	const prefix = detailPrefix("result", theme, TOOL_INDENT, agent.status === "failed");
@@ -396,7 +421,7 @@ function agentBodyLines(
 	if (options.showResult && agent.output) {
 		lines.push(...(options.expanded
 			? expandedResultLines(agent, width, theme)
-			: [detailLine("result", compact(agent.output, RESULT_PREVIEW_CHARS), width, theme, TOOL_INDENT, agent.status === "failed")]));
+			: collapsedResultLines(agent, width, theme)));
 	}
 	if (options.showResult && agent.error) lines.push(detailLine("error", compact(agent.error, 240), width, theme));
 	const usage = options.showUsage ? usageText(agent) : "";

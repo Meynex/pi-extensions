@@ -499,6 +499,33 @@ describe("subagents", () => {
 		]);
 	});
 
+	test("collapses long waited output like bash and expands with Ctrl+O", async () => {
+		const harness = createHarness();
+		const started = await spawnAgent(harness, "Produce a detailed review");
+		const name = started.details.agents[0].name;
+		const output = Array.from({ length: 8 }, (_, index) => `review line ${index + 1}`).join("\n");
+		const waitArgs = { action: "wait", agent_names: [name], timeout_ms: 1_000 };
+		const waiting = harness.tool.execute("wait-long-output", waitArgs, undefined, undefined, harness.ctx);
+		harness.clients[0].complete(output);
+		const waited = await waiting;
+
+		const collapsed = rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: false }, renderTheme, { args: waitArgs }), 100);
+		expect(collapsed.slice(3, 8)).toEqual([
+			"    result  … +4 earlier lines (Ctrl+O for full output)",
+			"            review line 5",
+			"            review line 6",
+			"            review line 7",
+			"            review line 8",
+		]);
+		expect(collapsed.join("\n")).not.toContain("review line 1");
+		expect(collapsed.at(-1)).toContain("usage");
+
+		const expanded = rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: true }, renderTheme, { args: waitArgs }), 100);
+		expect(expanded.join("\n")).toContain("review line 1");
+		expect(expanded.join("\n")).toContain("review line 8");
+		expect(expanded.join("\n")).not.toContain("Ctrl+O for full output");
+	});
+
 	test("renders automatic completion as the same expandable tool block", async () => {
 		const harness = createHarness();
 		await spawnAgent(harness, "Review renderer");
