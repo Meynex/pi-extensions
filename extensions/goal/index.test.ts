@@ -442,6 +442,7 @@ test("goal_complete renders one compact completed block and hides stale calls", 
 
 	const result = await h.tools.goal_complete.execute("call", { summary: "shipped the fix" }, undefined, undefined, h.ctx);
 	expect(h.notifications).toHaveLength(notificationsBeforeCompletion);
+	expect(result.terminate).toBe(true);
 	expect(result.details.completion).toBeDefined();
 	expect(result.details.completion.activeTimeMs).toBeGreaterThanOrEqual(0);
 	expect(result.details.completion.validationCount).toBe(0);
@@ -474,7 +475,7 @@ test("/goal complete surfaces lifetime stats in the notification", async () => {
 	expect(note.message).toMatch(/active.*cycle/i);
 });
 
-test("goal_block counts once per settled run across a final tool-less turn", async () => {
+test("goal_block terminates and counts once per settled run", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("reduce p95 latency below 120ms", h.ctx);
 
@@ -483,9 +484,10 @@ test("goal_block counts once per settled run across a final tool-less turn", asy
 		await emit(h, "agent_start");
 		await emit(h, "turn_start", { turnIndex: 0, timestamp: 0 });
 		result = await h.tools.goal_block.execute(`call-${run}`, { blocker: "flaky CI on macOS" }, undefined, undefined, h.ctx);
+		expect(result.terminate).toBe(true);
 		await emit(h, "turn_end", { turnIndex: 0, toolResults: [{ toolName: "goal_block" }] });
-		// Pi performs a final model turn after the tool result. It has no goal_block
-		// call, but belongs to the same low-level run and must not erase the audit.
+		// A single goal_block skips the follow-up model turn. Keep the audit robust
+		// when a non-terminating sibling tool still causes one in the same run.
 		await emit(h, "turn_start", { turnIndex: 1, timestamp: 0 });
 		await emit(h, "turn_end", { turnIndex: 1, toolResults: [] });
 		await emit(h, "agent_settled");
@@ -507,6 +509,7 @@ test("goal_block counts once per settled run across a final tool-less turn", asy
 	await emit(h, "agent_start");
 	await emit(h, "turn_start", { turnIndex: 0, timestamp: 0 });
 	const recorded = await h.tools.goal_block.execute("dup-1", { blocker: "same blocker" }, undefined, undefined, h.ctx);
+	expect(recorded.terminate).toBe(true);
 	expect(recorded.details.blocked).toBe(false);
 	block = h.tools.goal_block.renderResult(recorded, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
 	lines = renderBlock(block);
@@ -516,6 +519,7 @@ test("goal_block counts once per settled run across a final tool-less turn", asy
 	await emit(h, "turn_end", { turnIndex: 0, toolResults: [{ toolName: "goal_block" }] });
 	await emit(h, "turn_start", { turnIndex: 1, timestamp: 0 });
 	const duplicate = await h.tools.goal_block.execute("dup-2", { blocker: "same blocker" }, undefined, undefined, h.ctx);
+	expect(duplicate.terminate).toBe(true);
 	expect(duplicate.details.duplicateRun).toBe(true);
 	block = h.tools.goal_block.renderResult(duplicate, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
 	lines = renderBlock(block);

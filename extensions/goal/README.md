@@ -116,15 +116,18 @@ All sections except `# Goal` are optional.
   `replace: true`, so an in-progress goal cannot be silently redefined around
   an easier task.
 - **`goal_complete`** — introduced when a `/goal` first becomes active; marks the
-  goal complete and accepts an optional `summary`. The completion block also shows
-  the goal's lifetime stats (active time, cycles, criteria, and token
-  usage), since the overlay card hides once the goal is complete. This block is
-  the sole completion feedback for tool-driven completion; manual `/goal
-  complete` surfaces the same stats once via a notification.
+  goal complete, terminates the current agent run, and accepts an optional
+  `summary`. The completion block also shows the goal's lifetime stats (active
+  time, cycles, criteria, and token usage), since the overlay card hides once the
+  goal is complete. This block is the sole completion feedback for tool-driven
+  completion; manual `/goal complete` surfaces the same stats once via a
+  notification.
 - **`goal_block`** — introduced when a `/goal` first becomes active; records a
-  blocker. Optional fields can describe the blocker, attempted work, supporting
-  detail, and next input; marks the goal `blocked` only after the same blocker
-  repeats across three settled agent runs. Multiple reports in one run count once.
+  blocker and terminates the current agent run so the next report belongs to a
+  fresh settled run. Optional fields can describe the blocker, attempted work,
+  supporting detail, and next input; marks the goal `blocked` only after the same
+  blocker repeats across three settled agent runs. Multiple reports in one run
+  count once.
 
 `goal_set` is always registered. `goal_complete` and `goal_block` start inactive,
 are added when the first goal becomes active, and remain in the active loadout for

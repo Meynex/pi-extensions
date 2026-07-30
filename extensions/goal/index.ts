@@ -1233,6 +1233,7 @@ export default function (pi: ExtensionAPI) {
 			return {
 				content: [{ type: "text", text: `Goal marked complete.\nObjective: ${state.objective}${params.summary ? `\nSummary: ${params.summary}` : ""}` }],
 				details: { ok: true, completion: stats },
+				terminate: true,
 			};
 		},
 	});
@@ -1260,7 +1261,11 @@ export default function (pi: ExtensionAPI) {
 			const nextInput = params.next_input?.trim() || undefined;
 			const fingerprint = blockerFingerprint(blocker, nextInput);
 			if (currentRunBlockerFingerprint !== undefined) {
-				return { content: [{ type: "text", text: "A blocker has already been recorded for this settled agent run. Wait for the next goal continuation before reporting it again." }], details: { ok: true, blocked: false, duplicateRun: true } };
+				return {
+					content: [{ type: "text", text: "A blocker has already been recorded for this settled agent run. Wait for the next goal continuation before reporting it again." }],
+					details: { ok: true, blocked: false, duplicateRun: true },
+					terminate: true,
+				};
 			}
 			currentRunBlockerFingerprint = fingerprint;
 			const previous = state.blockedAudit;
@@ -1286,6 +1291,7 @@ export default function (pi: ExtensionAPI) {
 				return {
 					content: [{ type: "text", text: `Blocker recorded (${count}/${BLOCKED_AUDIT_THRESHOLD}); goal remains active. Continue if any meaningful progress is possible. If the same blocker recurs in a later goal run, call goal_block again.\n\n${details}` }],
 					details: { ok: true, blocked: false, count, threshold: BLOCKED_AUDIT_THRESHOLD },
+					terminate: true,
 				};
 			}
 
@@ -1294,6 +1300,7 @@ export default function (pi: ExtensionAPI) {
 			return {
 				content: [{ type: "text", text: `Goal marked blocked after ${count} consecutive reports of the same blocker.\n\n${details}\n\nResume with /goal resume once unblocked.` }],
 				details: { ok: true, blocked: true, count, threshold: BLOCKED_AUDIT_THRESHOLD },
+				terminate: true,
 			};
 		},
 	});
