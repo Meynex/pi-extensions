@@ -315,6 +315,20 @@ test("re-anchors persisted goal context after restore and compaction", async () 
 	expect(sentMessages(h, "goal-context").at(-1)!.message.content).toContain("finish the migration");
 });
 
+test("does not re-anchor a completed goal after compaction or restore", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("finish the migration", h.ctx);
+	const contextsBeforeCompletion = sentMessages(h, "goal-context").length;
+
+	await h.tools.goal_complete.execute("complete", {}, undefined, undefined, h.ctx);
+	await emit(h, "session_compact");
+	await emit(h, "session_start");
+
+	expect(latestGoalState(h).status).toBe("complete");
+	expect(sentMessages(h, "goal-context")).toHaveLength(contextsBeforeCompletion);
+	expect(sentMessages(h, "goal-context").some(({ message }) => message.details?.status === "complete")).toBe(false);
+});
+
 test("continuation prompt is injected transiently and stale markers are pruned", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("ship <unsafe>&", h.ctx);
@@ -379,11 +393,12 @@ test("goal tools stay active after their first session activation", async () => 
 		expect(h.activeTools.has(name)).toBe(true);
 	}
 
+	const contextsBeforeClear = sentMessages(h, "goal-context").length;
 	await h.commands.goal.handler("clear", h.ctx);
 	for (const name of ["goal_complete", "goal_block"]) {
 		expect(h.activeTools.has(name)).toBe(true);
 	}
-	expect(sentMessages(h, "goal-context").at(-1)!.message.content).toContain("has been cleared");
+	expect(sentMessages(h, "goal-context")).toHaveLength(contextsBeforeClear);
 });
 
 test("editing a completed goal reactivates it and starts the loop", async () => {
@@ -422,8 +437,7 @@ test("terminal provider errors block the active goal instead of continuing", asy
 	expect(state.status).toBe("blocked");
 	expect(state.blockedAudit.fingerprint).toBe("provider-usage-limit");
 	expect(state.blockedAudit.evidence).toBe("429 too many requests");
-	expect(sentMessages(h, "goal-context")).toHaveLength(contextsBeforeError + 1);
-	expect(sentMessages(h, "goal-context").at(-1)!.message.content).toContain("goal below is blocked");
+	expect(sentMessages(h, "goal-context")).toHaveLength(contextsBeforeError);
 	expect(sentMessages(h, "goal-continuation")).toHaveLength(continuationsBeforeError);
 });
 

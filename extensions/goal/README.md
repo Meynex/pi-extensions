@@ -17,10 +17,12 @@ should not create a goal.
 
 The goal is a short statement plus optional **validation criteria**. A compact
 summary is surfaced in its own overlay card, while the full goal is available via
-`/goal-status`. Canonical goal-state changes are appended as hidden model-context
+`/goal-status`. Active goal instructions are appended as hidden model-context
 messages, including fresh anchors after restore and compaction, so the system
-prompt remains stable. Objective and validation text are wrapped as untrusted
-user-provided data before reaching the model.
+prompt remains stable. Paused, blocked, completed, and cleared goals stay in
+runtime state without adding model instructions. This lets later ordinary tasks
+run normally. Objective and validation text are wrapped as untrusted user-provided
+data before reaching the model.
 
 ## How the loop works
 

@@ -171,17 +171,6 @@ export function buildGoalContext(state: GoalState): string {
 	return `## Active session goal\n${untrustedGoalBlock(state)}\n\nUse the execution plan for intermediate steps. Do not mark the goal complete until the objective has actually been achieved and no required work remains. If no valid path remains, use goal_block after the same blocking condition has recurred across the blocked audit threshold. Do not declare the goal blocked merely because the work is hard, slow, uncertain, or would benefit from clarification — but blocking IS the correct terminal state, not laziness, once all work achievable without user input or an external-state change is genuinely done and the remainder requires a human decision, design discussion, trace collection, or out-of-session action; in that case call goal_block and stop instead of re-auditing the same conclusion.`;
 }
 
-function buildGoalStateContext(state?: GoalState): string {
-	if (!state) return "## Session goal state\nThe previous session goal has been cleared. Do not continue it.";
-	if (state.status === "active") return buildGoalContext(state);
-	const guidance = state.status === "paused"
-		? "The session goal below is paused. Do not continue it automatically; wait until a later goal-context message marks it active again."
-		: state.status === "blocked"
-			? "The session goal below is blocked. Do not continue it until user input or an external-state change allows it to resume."
-			: "The session goal below is complete. Do not continue or reopen it unless a later goal-context message establishes a new active goal.";
-	return `## Session goal state: ${state.status}\n${guidance}\n\n${untrustedGoalBlock(state)}`;
-}
-
 /**
  * The silent continuation prompt sent at each safe boundary (agent_settled).
  * Re-orients the agent around the objective and asks for a completion audit.
@@ -724,11 +713,12 @@ export default function (pi: ExtensionAPI) {
 
 	const persist = () => pi.appendEntry(ENTRY_TYPE, state ? { state } satisfies PersistedGoalEntry : { cleared: true } satisfies PersistedGoalEntry);
 	const appendGoalContext = (snapshot: GoalState | undefined = state) => {
+		if (snapshot?.status !== "active") return;
 		pi.sendMessage({
 			customType: GOAL_CONTEXT_CUSTOM_TYPE,
-			content: buildGoalStateContext(snapshot),
+			content: buildGoalContext(snapshot),
 			display: false,
-			details: { status: snapshot?.status ?? "cleared" },
+			details: { status: snapshot.status },
 		}, { deliverAs: "steer" });
 	};
 
@@ -1120,8 +1110,8 @@ export default function (pi: ExtensionAPI) {
 		maybeContinue(ctx, settledRunBlockerFingerprint);
 	});
 
-	// Re-anchor the canonical state after compaction without changing the
-	// cacheable system prompt prefix.
+	// Re-anchor active goal instructions after compaction without changing the
+	// cacheable system prompt prefix. Inactive goals remain runtime-only state.
 	pi.on("session_compact", (_event, ctx) => {
 		refreshOverlayStats(ctx, true);
 		emit(ctx);
