@@ -1216,14 +1216,13 @@ export default function (pi: ExtensionAPI) {
 			if (!state) return inactiveGoalToolResult("no-goal");
 			if (state.status !== "active") return inactiveGoalToolResult(`goal-${state.status}`);
 			setStatus("complete", ctx);
-			// The completion block is the sole tool-path completion surface and
-			// persists these lifetime stats after the overlay hides.
+			// Persist lifetime stats after the overlay hides. Keep this tool
+			// non-terminating so the model can provide its final report.
 			refreshOverlayStats(ctx);
 			const stats = completionStats(state, overlayStats);
 			return {
 				content: [{ type: "text", text: `Goal marked complete.\nObjective: ${state.objective}${params.summary ? `\nSummary: ${params.summary}` : ""}` }],
 				details: { ok: true, completion: stats },
-				terminate: true,
 			};
 		},
 	});

@@ -118,11 +118,11 @@ All sections except `# Goal` are optional.
   `replace: true`, so an in-progress goal cannot be silently redefined around
   an easier task.
 - **`goal_complete`** — introduced when a `/goal` first becomes active; marks the
-  goal complete, terminates the current agent run, and accepts an optional
-  `summary`. The completion block also shows the goal's lifetime stats (active
-  time, cycles, criteria, and token usage), since the overlay card hides once the
-  goal is complete. This block is the sole completion feedback for tool-driven
-  completion; manual `/goal complete` surfaces the same stats once via a
+  goal complete and accepts an optional `summary`. It remains non-terminating so
+  Pi performs the follow-up model turn that delivers the final report. The
+  completion block also shows the goal's lifetime stats (active time, cycles,
+  criteria, and token usage), since the overlay card hides once the goal is
+  complete. Manual `/goal complete` surfaces the same stats once via a
   notification.
 - **`goal_block`** — introduced when a `/goal` first becomes active; records a
   blocker and terminates the current agent run so the next report belongs to a

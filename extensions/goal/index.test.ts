@@ -447,7 +447,7 @@ function renderBlock(component: any, width = 80): string[] {
 	return component.render(width);
 }
 
-test("goal_complete renders one compact completed block and hides stale calls", async () => {
+test("goal_complete allows a final response, renders one compact block, and hides stale calls", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("reduce p95 latency below 120ms", h.ctx);
 	h.entries.push({ type: "message", message: { role: "assistant", usage: { input: 41, output: 43, cacheRead: 47, cacheWrite: 53 } } });
@@ -456,7 +456,8 @@ test("goal_complete renders one compact completed block and hides stale calls", 
 
 	const result = await h.tools.goal_complete.execute("call", { summary: "shipped the fix" }, undefined, undefined, h.ctx);
 	expect(h.notifications).toHaveLength(notificationsBeforeCompletion);
-	expect(result.terminate).toBe(true);
+	// Pi should perform a follow-up model turn so the user receives a final report.
+	expect(result.terminate).toBeUndefined();
 	expect(result.details.completion).toBeDefined();
 	expect(result.details.completion.activeTimeMs).toBeGreaterThanOrEqual(0);
 	expect(result.details.completion.validationCount).toBe(0);
