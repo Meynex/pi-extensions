@@ -98,8 +98,12 @@ body.
 
 Action headlines identify both the target and purpose, for example `Spawned agent
 api-review to inspect API`, `Queued message for api-review to share integration
-context`, `Waited for agents to collect reviews`, and `Closed agent api-review to
-release the reviewer`. Single-agent action bodies omit the repeated name and show
+context`, and `Closed agent api-review to release the reviewer`. Wait headlines
+keep state separate from the exact reason: `Waiting for agents — Collect reviews`
+while polling, `Wait timed out · 4 agents still running — Collect reviews` after a
+timeout, or `Updates received · 3 agents still running — Final document checks`
+when a message or completion arrives. Single-agent action bodies omit the repeated
+name and show
 only context, status, and action details. Multi-agent `wait` and `list` bodies,
 mailbox batches, and automatic completions retain names where the headline does
 not identify one child. Spawn cards show identity and a concise prompt preview.

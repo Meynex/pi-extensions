@@ -279,9 +279,15 @@ function actionVerb(action: unknown, partial: boolean, theme: any, args?: Record
 	if (action === "send" || action === "followup") return `${partial ? "Sending" : "Sent"} follow-up${identity ? ` to ${identity}` : ""}`;
 	if (action === "message") return `${partial ? "Queueing" : "Queued"} message${identity ? ` for ${identity}` : ""}`;
 	if (action === "wait") {
-		if (!partial && details?.interrupted) return "Wait interrupted";
-		if (!partial && details?.timedOut) return "Agents still running";
-		return partial ? "Waiting for agents" : "Waited for agents";
+		if (partial) return "Waiting for agents";
+		const activeCount = details?.agents?.filter(isActive).length ?? 0;
+		const activeSummary = activeCount > 0
+			? ` · ${activeCount} agent${activeCount === 1 ? "" : "s"} still running`
+			: "";
+		if (details?.interrupted) return `Wait interrupted${activeSummary}`;
+		if (details?.timedOut) return `Wait timed out${activeSummary}`;
+		if (details?.agents?.length || details?.mailbox?.length) return `Updates received${activeSummary}`;
+		return "Wait completed";
 	}
 	if (action === "list") return partial ? "Listing agents" : "Listed agents";
 	if (action === "read") return `${partial ? "Reading" : "Read"} agent${identity ? ` ${identity}` : ""}`;
@@ -309,7 +315,10 @@ function actionDetail(args: Record<string, unknown> | undefined): string {
 
 function reasoningDetail(args: Record<string, unknown> | undefined, theme: any, partial: boolean): string {
 	const reasoning = compact(String(args?.reasoning ?? ""), 100);
-	if (reasoning) return `${theme.fg("dim", "to")} ${theme.fg("accent", reasoning)}`;
+	if (reasoning) {
+		const connector = args?.action === "wait" ? "—" : "to";
+		return `${theme.fg("dim", connector)} ${theme.fg("accent", reasoning)}`;
+	}
 	return partial ? theme.fg("dim", "…") : "";
 }
 

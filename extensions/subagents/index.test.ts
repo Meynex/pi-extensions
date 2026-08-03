@@ -467,7 +467,7 @@ describe("subagents", () => {
 		harness.clients[0].complete("API review complete.");
 		const waited = await waiting;
 		const collapsed = rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: false }, renderTheme, { args: waitArgs }));
-		expect(collapsed[0]).toBe("• Waited for agents to Collect delegated review");
+		expect(collapsed[0]).toBe("• Updates received — Collect delegated review");
 		expect(collapsed[1]).toContain(first.details.agents[0].name);
 		expect(collapsed[2]).toBe("    prompt  Inspect API");
 		expect(collapsed[3]).toBe("    result  API review complete.");
@@ -480,10 +480,12 @@ describe("subagents", () => {
 		expect(expanded.every((line) => visibleWidth(line) <= 60)).toBe(true);
 
 		const second = await spawnAgent(harness, "Slow task");
-		const timeoutArgs = { reasoning: "Check slow task", action: "wait", agent_names: [second.details.agents[0].name], timeout_ms: 0 };
+		const timeoutArgs = { reasoning: "Wait for first full documentation group", action: "wait", agent_names: [second.details.agents[0].name], timeout_ms: 0 };
+		const partialWait = rendered(harness.tool.renderCall(timeoutArgs, renderTheme, { isPartial: true, args: timeoutArgs }));
+		expect(partialWait[0]).toBe("• Waiting for agents — Wait for first full documentation group");
 		const timeout = await harness.tool.execute("timeout", timeoutArgs, undefined, undefined, harness.ctx);
 		const timedOut = rendered(harness.tool.renderResult(timeout, { isPartial: false, expanded: false }, renderTheme, { args: timeoutArgs }));
-		expect(timedOut[0]).toBe("• Agents still running to Check slow task");
+		expect(timedOut[0]).toBe("• Wait timed out · 1 agent still running — Wait for first full documentation group");
 		expect(timedOut.join("\n")).toContain("running");
 		expect(timeout.content[0].text).toStartWith("No mailbox update arrived during this wait interval.\nAgents continue running and updates remain queued without forcing a parent turn. Do not ask healthy running agents to stop or finalize because of this timeout.\n");
 
