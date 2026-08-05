@@ -1,8 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Input, Text, wrapTextWithAnsi, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
+import { randomUUID } from "node:crypto";
 
 interface Question { id: string; question: string; options?: string[]; allow_other?: boolean; secret?: boolean }
-interface Answer { id: string; question: string; answer?: string; provided?: boolean; cancelled?: boolean; secret?: boolean }
+interface Answer { id: string; question: string; answer?: string; reference?: string; provided?: boolean; cancelled?: boolean; secret?: boolean }
 interface Details { questions: Question[]; answers: Answer[]; interrupted: boolean }
 
 const TERMINAL_TITLE_EVENT = "terminal-title:override";
@@ -31,8 +32,45 @@ const parameters = {
 	required: ["questions"],
 } as any;
 
+const SECRET_REFERENCE_PATTERN = /\{\{questionnaire-secret:[0-9a-f-]{36}\}\}/g;
+
 function hasAnswer(answer: Answer | undefined): boolean {
 	return Boolean(answer && (answer.answer !== undefined || answer.provided));
+}
+
+function secretReference(): string {
+	return `{{questionnaire-secret:${randomUUID()}}}`;
+}
+
+function findSecretReferences(value: unknown, references = new Set<string>()): Set<string> {
+	if (typeof value === "string") {
+		for (const match of value.matchAll(SECRET_REFERENCE_PATTERN)) references.add(match[0]);
+		return references;
+	}
+	if (Array.isArray(value)) {
+		for (const item of value) findSecretReferences(item, references);
+		return references;
+	}
+	if (value && typeof value === "object") {
+		for (const item of Object.values(value)) findSecretReferences(item, references);
+	}
+	return references;
+}
+
+function substituteSecretReferences(value: unknown, secrets: ReadonlyMap<string, string>): unknown {
+	if (typeof value === "string") {
+		return value.replace(SECRET_REFERENCE_PATTERN, (reference) => secrets.get(reference) ?? reference);
+	}
+	if (Array.isArray(value)) {
+		for (let index = 0; index < value.length; index++) value[index] = substituteSecretReferences(value[index], secrets);
+		return value;
+	}
+	if (value && typeof value === "object") {
+		for (const [key, item] of Object.entries(value)) {
+			(value as Record<string, unknown>)[key] = substituteSecretReferences(item, secrets);
+		}
+	}
+	return value;
 }
 
 function numberedPrompt(question: string, index: number, total: number, theme?: any): string {
@@ -204,10 +242,23 @@ function recap(details: Details, theme: any): string[] {
 }
 
 export default function (pi: ExtensionAPI) {
+	const secrets = new Map<string, string>();
+
+	pi.on("tool_call", (event) => {
+		const references = findSecretReferences(event.input);
+		if (references.size === 0) return;
+		const unavailable = [...references].filter((reference) => !secrets.has(reference));
+		if (unavailable.length > 0) {
+			return { block: true, reason: "A questionnaire secret reference expired. Ask the user for the secret again." };
+		}
+		substituteSecretReferences(event.input, secrets);
+	});
+	pi.on("session_shutdown", () => secrets.clear());
+
 	pi.registerTool({
 		name: "questionnaire",
 		label: "Questions",
-		description: "Ask one or more structured questions and preserve the answers in the transcript.",
+		description: "Ask structured questions. Secret answers return opaque references; copy them unchanged into later tool arguments.",
 		parameters,
 		executionMode: "sequential",
 		async execute(toolCallId: string, params: any, _signal: AbortSignal, _update: any, ctx: any) {
@@ -239,9 +290,13 @@ export default function (pi: ExtensionAPI) {
 							answers.push({ id: question.id, question: question.question, cancelled: true, secret: question.secret });
 							break;
 						}
-						answers.push(question.secret
-							? { id: question.id, question: question.question, provided: true, secret: true }
-							: { id: question.id, question: question.question, answer: collected.answer });
+						if (question.secret) {
+							const reference = secretReference();
+							secrets.set(reference, collected.answer ?? "");
+							answers.push({ id: question.id, question: question.question, reference, provided: true, secret: true });
+						} else {
+							answers.push({ id: question.id, question: question.question, answer: collected.answer });
+						}
 					} finally {
 						pi.events.emit(QUESTION_RESOLVED_EVENT, {
 							requestId,
@@ -256,7 +311,7 @@ export default function (pi: ExtensionAPI) {
 				if (questions.length > 0) clearAttentionTitle(pi, ctx);
 			}
 			const details: Details = { questions, answers, interrupted };
-			const response = answers.filter(hasAnswer).map((answer) => `${answer.id}: ${answer.secret ? "[secret provided]" : answer.answer}`).join("\n");
+			const response = answers.filter(hasAnswer).map((answer) => `${answer.id}: ${answer.secret ? answer.reference : answer.answer}`).join("\n");
 			return { content: [{ type: "text", text: interrupted ? `${response}\nQuestionnaire interrupted`.trim() : response }], details };
 		},
 		renderCall: () => new Text("", 0, 0),

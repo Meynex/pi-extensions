@@ -20,8 +20,15 @@ Supports multiple questions in one call, "other" free-text answers, and
 secret inputs. Every prompt shows its position and total (`Question 2/3`) with
 accented progress, a subdued separator, and readable theme-text question copy.
 The terminal title switches to `❓ Input needed` while a response is pending.
-Secret responses use a masked TUI field; only a `[secret provided]` marker is
-sent to the model or persisted in the transcript.
+
+Secret responses use a masked TUI field. The model and transcript receive only
+an opaque reference such as `{{questionnaire-secret:…}}`. The model can copy
+that reference unchanged into a later tool argument. Immediately before the
+tool runs, Pi replaces the reference with the secret value. The value stays in
+extension memory and is never sent to the model or persisted in the transcript.
+References expire when the session changes, Pi reloads, or Pi shuts down. An
+expired reference blocks the tool call and asks the model to request the secret
+again.
 
 Each prompt emits `questions:waiting` with opaque request and questionnaire IDs,
 response mode, options, progress, and whether the response is secret. Trusted integrations can

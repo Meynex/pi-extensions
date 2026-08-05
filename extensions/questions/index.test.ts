@@ -1,15 +1,19 @@
 import { expect, test } from "bun:test";
 import questions from "./index";
 
-type BusHandler = (event: unknown) => void;
+type BusHandler = (event: unknown) => unknown | Promise<unknown>;
 
 function registeredTool(
 	events: Array<{ name: string; payload: any }> = [],
 	busHandlers: Record<string, BusHandler[]> = {},
+	lifecycleHandlers: Record<string, BusHandler[]> = {},
 ) {
 	let tool: any;
 	questions({
 		registerTool: (definition: any) => { tool = definition; },
+		on(name: string, handler: BusHandler) {
+			(lifecycleHandlers[name] ??= []).push(handler);
+		},
 		events: {
 			emit(name: string, payload: any) {
 				events.push({ name, payload });
@@ -147,9 +151,38 @@ test("ignores remote answers for secret prompts", async () => {
 	finishSecret("real-secret");
 	const result = await execution;
 
-	expect(result.content[0].text).toBe("token: [secret provided]");
+	expect(result.content[0].text).toMatch(/^token: \{\{questionnaire-secret:[0-9a-f-]{36}\}\}$/);
 	expect(JSON.stringify(result)).not.toContain("stolen");
 	expect(JSON.stringify(result)).not.toContain("real-secret");
+});
+
+test("substitutes secret references only for tool execution", async () => {
+	const lifecycleHandlers: Record<string, BusHandler[]> = {};
+	const tool = registeredTool([], {}, lifecycleHandlers);
+	const result = await tool.execute("secret", { questions: [
+		{ id: "token", question: "API token?", secret: true, allow_other: false },
+	] }, undefined, undefined, {
+		mode: "tui",
+		ui: {
+			theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text },
+			setTitle() {},
+			custom: async () => "actual-secret",
+		},
+	});
+	const reference = result.details.answers[0].reference;
+	const input = { command: `curl -H 'X-API-Key: ${reference}' https://example.test` };
+
+	for (const handler of lifecycleHandlers.tool_call ?? []) await handler({ toolName: "bash", input });
+
+	expect(input.command).toBe("curl -H 'X-API-Key: actual-secret' https://example.test");
+	expect(JSON.stringify(result)).not.toContain("actual-secret");
+
+	for (const handler of lifecycleHandlers.session_shutdown ?? []) await handler({});
+	const staleInput = { command: `echo ${reference}` };
+	const resolutions = [];
+	for (const handler of lifecycleHandlers.tool_call ?? []) resolutions.push(await handler({ toolName: "bash", input: staleInput }));
+	expect(resolutions).toContainEqual({ block: true, reason: "A questionnaire secret reference expired. Ask the user for the secret again." });
+	expect(staleInput.command).toBe(`echo ${reference}`);
 });
 
 test("ignores invalid remote choices until an allowed answer arrives", async () => {
