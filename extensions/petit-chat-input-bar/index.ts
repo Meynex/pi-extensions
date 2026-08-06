@@ -33,6 +33,7 @@ interface GeometryHookState {
 	original: CompositeOverlays;
 	wrapper: CompositeOverlays;
 	listeners: Set<GeometryListener>;
+	canRestore: boolean;
 }
 
 interface TuiRuntime {
@@ -277,16 +278,17 @@ class PetitChatOverlayHost implements Component {
 function installGeometryHook(tui: TUI, listener: GeometryListener): (() => void) | undefined {
 	const runtime = tui as unknown as TuiRuntime;
 	let state = runtime[GEOMETRY_HOOK_KEY] as GeometryHookState | undefined;
+	const resolved = state ? undefined : resolveCompositeOverlays(runtime);
 
 	// `compositeOverlays` is a private Pi API. Fail closed if a future Pi
 	// version removes it or changes it to a non-callable value.
-	if (!state && typeof runtime.compositeOverlays !== "function") return undefined;
+	if (!state && !resolved) return undefined;
 
 	// Reuse one shared dispatcher. If another extension wraps the compositor
 	// after this one, our wrapper remains in that call chain and can be reused
 	// across reloads without adding another dormant layer.
 	if (!state) {
-		const original = runtime.compositeOverlays!;
+		const { original, canRestore } = resolved!;
 		const listeners = new Set<GeometryListener>();
 		const wrapper: CompositeOverlays = (lines, termWidth, termHeight) => {
 			for (const current of [...listeners]) {
@@ -301,7 +303,7 @@ function installGeometryHook(tui: TUI, listener: GeometryListener): (() => void)
 			}
 			return original.call(runtime, lines, termWidth, termHeight);
 		};
-		state = { original, wrapper, listeners };
+		state = { original, wrapper, listeners, canRestore };
 		runtime[GEOMETRY_HOOK_KEY] = state;
 		runtime.compositeOverlays = wrapper;
 	}
@@ -311,6 +313,10 @@ function installGeometryHook(tui: TUI, listener: GeometryListener): (() => void)
 	return () => {
 		installedState.listeners.delete(listener);
 		if (installedState.listeners.size > 0) return;
+		// Pi 0.84 exposes the renderer through a forwarding Proxy. Each method
+		// read returns a new function, so wrapper identity cannot be checked.
+		// Keep the empty shared dispatcher installed for safe reuse on reload.
+		if (!installedState.canRestore) return;
 		if (runtime.compositeOverlays !== installedState.wrapper) return;
 
 		runtime.compositeOverlays = installedState.original;
@@ -318,6 +324,30 @@ function installGeometryHook(tui: TUI, listener: GeometryListener): (() => void)
 			delete runtime[GEOMETRY_HOOK_KEY];
 		}
 	};
+}
+
+function resolveCompositeOverlays(
+	runtime: TuiRuntime,
+): { original: CompositeOverlays; canRestore: boolean } | undefined {
+	const current = runtime.compositeOverlays;
+	if (typeof current !== "function") return undefined;
+
+	// Normal TUI objects return a stable method and can be restored by identity.
+	if (runtime.compositeOverlays === current) return { original: current, canRestore: true };
+
+	// Pi's stable TUI reference returns a fresh forwarding closure on every get.
+	// Capturing it would recurse after the wrapper becomes the current method.
+	// Resolve the concrete class method through the Proxy's forwarded prototype.
+	let prototype = Object.getPrototypeOf(runtime);
+	while (prototype) {
+		const descriptor = Object.getOwnPropertyDescriptor(prototype, "compositeOverlays");
+		if (typeof descriptor?.value === "function") {
+			return { original: descriptor.value as CompositeOverlays, canRestore: false };
+		}
+		prototype = Object.getPrototypeOf(prototype);
+	}
+
+	return undefined;
 }
 
 function isEditorBorderCandidate(value: string, termWidth: number): boolean {

@@ -48,6 +48,54 @@ test("positions the companion from editor borders and cleans up its compositor h
 	expect(tui.compositeOverlays).toBe(originalComposite);
 });
 
+test("does not recurse through Pi's forwarding TUI reference", () => {
+	const handlers = new Map<string, (...args: any[]) => any>();
+	let widgetFactory: any;
+	petitChat({
+		on: (name: string, handler: any) => handlers.set(name, handler),
+		registerCommand() {},
+	} as any);
+	const ctx = {
+		mode: "tui",
+		ui: { setWidget(_key: string, value: any) { widgetFactory = value; } },
+	};
+	handlers.get("session_start")?.({}, ctx);
+
+	let compositeCalls = 0;
+	class Renderer {
+		compositeOverlays(lines: string[]): string[] {
+			compositeCalls += 1;
+			return lines;
+		}
+		showOverlay() {
+			return { setHidden() {}, hide() {} };
+		}
+	}
+	const renderer = new Renderer();
+	const tui = new Proxy({} as any, {
+		get: (_target, property) => {
+			const value = Reflect.get(renderer, property, renderer);
+			if (typeof value !== "function") return value;
+			return (...args: any[]) => Reflect.apply(Reflect.get(renderer, property, renderer), renderer, args);
+		},
+		set: (_target, property, value) => Reflect.set(renderer, property, value, renderer),
+		getPrototypeOf: () => Reflect.getPrototypeOf(renderer),
+	});
+
+	const host = widgetFactory(tui, { fg: (_color: string, text: string) => text });
+	const border = "─".repeat(40);
+	expect(tui.compositeOverlays([border, "input", border], 40, 12)).toEqual([
+		border,
+		"input",
+		border,
+	]);
+	expect(compositeCalls).toBe(1);
+
+	host.dispose();
+	expect(tui.compositeOverlays(["after dispose"], 40, 12)).toEqual(["after dispose"]);
+	expect(compositeCalls).toBe(2);
+});
+
 test("pauses hidden animation and keeps always mode continuous across agent events", async () => {
 	const handlers = new Map<string, (...args: any[]) => any>();
 	const commands = new Map<string, any>();

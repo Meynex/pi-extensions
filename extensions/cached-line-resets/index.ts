@@ -29,6 +29,7 @@ type ImageBlock = { start: number; end: number };
 
 interface PatchState {
 	owner: symbol;
+	installed: boolean;
 	original: (lines: string[]) => string[];
 	originalImageRange?: (firstChanged: number, lastChanged: number, newLines: string[]) => ChangedRange;
 	cache: Map<string, string>;
@@ -38,6 +39,39 @@ interface PatchState {
 	clears: number;
 	imagePositionHits: number;
 	imagePositionMisses: number;
+}
+
+function restorePatch(tui: TuiCacheHost, state: PatchState, owner: symbol): void {
+	if (tui[PATCH]?.owner !== owner) return;
+	tui.applyLineResets = state.original;
+	if (state.originalImageRange) tui.expandChangedRangeForKittyImages = state.originalImageRange;
+	state.installed = false;
+	// Pi's forwarding Proxy does not forward deleteProperty, so the inactive
+	// state can remain on the renderer. `installPatch` replaces it on reload.
+	delete tui[PATCH];
+}
+
+function resolveMethod<T extends (...args: any[]) => any>(
+	tui: TuiCacheHost,
+	name: "applyLineResets" | "expandChangedRangeForKittyImages",
+): T | undefined {
+	const current = tui[name];
+	if (typeof current !== "function") return undefined;
+
+	// A normal TUI instance exposes a stable function. Pi 0.84 instead gives
+	// extensions a Proxy that creates a new forwarding closure on every read.
+	if (tui[name] === current) return current as T;
+
+	// Capturing the forwarding closure would recurse after this extension
+	// replaces the current method. Resolve the concrete class method instead.
+	let prototype = Object.getPrototypeOf(tui);
+	while (prototype) {
+		const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+		if (typeof descriptor?.value === "function") return descriptor.value as T;
+		prototype = Object.getPrototypeOf(prototype);
+	}
+
+	return undefined;
 }
 
 function kittyImageBlocks(tui: TuiCacheHost, lines: string[]): Map<number, ImageBlock> {
@@ -100,7 +134,7 @@ function stableKittyImageRange(
 function installPatch(tui: TuiCacheHost): () => void {
 	const owner = Symbol("cached-line-resets-owner");
 	const existing = tui[PATCH];
-	if (existing) {
+	if (existing?.installed) {
 		existing.owner = owner;
 		existing.cache.clear();
 		existing.hits = 0;
@@ -109,18 +143,17 @@ function installPatch(tui: TuiCacheHost): () => void {
 		existing.clears = 0;
 		existing.imagePositionHits = 0;
 		existing.imagePositionMisses = 0;
-		return () => {
-			if (tui[PATCH]?.owner !== owner) return;
-			tui.applyLineResets = existing.original;
-			if (existing.originalImageRange) tui.expandChangedRangeForKittyImages = existing.originalImageRange;
-			delete tui[PATCH];
-		};
+		return () => restorePatch(tui, existing, owner);
 	}
 
-	const original = tui.applyLineResets;
-	const originalImageRange = tui.expandChangedRangeForKittyImages;
+	const original = resolveMethod<(lines: string[]) => string[]>(tui, "applyLineResets");
+	if (!original) return () => {};
+	const originalImageRange = resolveMethod<
+		(firstChanged: number, lastChanged: number, newLines: string[]) => ChangedRange
+	>(tui, "expandChangedRangeForKittyImages");
 	const state: PatchState = {
 		owner,
+		installed: true,
 		original,
 		originalImageRange,
 		cache: new Map(),
@@ -178,10 +211,7 @@ function installPatch(tui: TuiCacheHost): () => void {
 	}
 
 	return () => {
-		if (tui[PATCH]?.owner !== owner) return;
-		tui.applyLineResets = original;
-		if (originalImageRange) tui.expandChangedRangeForKittyImages = originalImageRange;
-		delete tui[PATCH];
+		restorePatch(tui, state, owner);
 	};
 }
 
