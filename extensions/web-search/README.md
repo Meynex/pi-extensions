@@ -25,13 +25,17 @@ opening. Mistral article IDs are still opened with Mistral directly when
 configured.
 
 Fallbacks happen after timeouts, rate limits, server failures, blocked pages,
-empty content, or empty search results. A provider that returns HTTP 429 is
-paused for one minute in the current process.
+empty content, or empty search results. Exa retries HTTP 429 responses twice,
+using `Retry-After` when available or delays of roughly one and two seconds with
+jitter. Only a final 429 reaches the router and pauses Exa for one minute in the
+current process.
 
 ## Access
 
 Exa supports anonymous access, with `EXA_API_KEY` available for higher service
-limits. Firecrawl is credential-gated to avoid flaky shared-IP keyless limits;
+limits. Anonymous retries are independent in each process, so jitter reduces
+collisions between concurrent sessions without requiring shared state.
+Firecrawl is credential-gated to avoid flaky shared-IP keyless limits;
 set `FIRECRAWL_API_KEY` before it appears in routes.
 
 Mistral continues to read its API key and base URL from the `mistral` provider in

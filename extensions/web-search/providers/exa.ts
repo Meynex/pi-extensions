@@ -16,6 +16,8 @@ import type {
 
 const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
 const DEFAULT_TIMEOUT_MS = 20_000;
+const RATE_LIMIT_RETRY_DELAYS_MS = [1_000, 2_000] as const;
+const RATE_LIMIT_JITTER_MS = 500;
 
 function endpoint(): string {
 	const key = process.env.EXA_API_KEY?.trim();
@@ -32,40 +34,73 @@ function parseMaybeSse(text: string): any {
 	return JSON.parse(data);
 }
 
+function retryAfterMs(response: Response): number | undefined {
+	const value = response.headers.get("retry-after")?.trim();
+	if (!value) return undefined;
+	const seconds = Number(value);
+	if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
+	const date = Date.parse(value);
+	return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined;
+}
+
+async function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+	if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+	if (delayMs <= 0) return;
+	await new Promise<void>((resolve, reject) => {
+		const onAbort = () => {
+			clearTimeout(timer);
+			reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+		};
+		const timer = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve();
+		}, delayMs);
+		signal?.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
 async function callExa(tool: string, args: Record<string, unknown>, options: ProviderOptions = {}): Promise<{ text: string; elapsedMs: number }> {
 	const started = performance.now();
-	let response: Response;
-	try {
-		response = await fetch(endpoint(), {
-			method: "POST",
-			headers: { Accept: "application/json, text/event-stream", "Content-Type": "application/json" },
-			body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "tools/call", params: { name: tool, arguments: args } }),
-			signal: combineSignals(options.signal, options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
-		});
-	} catch (error) {
-		if (options.signal?.aborted) throw options.signal.reason ?? error;
-		throw new WebProviderError(`Exa request failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+	for (let attempt = 0; ; attempt++) {
+		let response: Response;
+		try {
+			response = await fetch(endpoint(), {
+				method: "POST",
+				headers: { Accept: "application/json, text/event-stream", "Content-Type": "application/json" },
+				body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "tools/call", params: { name: tool, arguments: args } }),
+				signal: combineSignals(options.signal, options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+			});
+		} catch (error) {
+			if (options.signal?.aborted) throw options.signal.reason ?? error;
+			throw new WebProviderError(`Exa request failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+		}
+		const raw = await response.text();
+		if (response.status === 429 && attempt < RATE_LIMIT_RETRY_DELAYS_MS.length) {
+			const delayMs = retryAfterMs(response) ?? RATE_LIMIT_RETRY_DELAYS_MS[attempt]!;
+			const jitterMs = Math.floor(Math.random() * (RATE_LIMIT_JITTER_MS + 1));
+			await waitForRetry(delayMs + jitterMs, options.signal);
+			continue;
+		}
+		if (!response.ok) {
+			throw new WebProviderError(`Exa HTTP ${response.status}: ${raw.slice(0, 300) || response.statusText}`, {
+				status: response.status,
+				retriable: response.status === 429 || response.status >= 500,
+			});
+		}
+		let payload: any;
+		try {
+			payload = parseMaybeSse(raw);
+		} catch (error) {
+			throw new WebProviderError("Exa returned invalid JSON", { cause: error });
+		}
+		if (payload?.error) throw new WebProviderError(`Exa MCP error: ${JSON.stringify(payload.error).slice(0, 500)}`);
+		const text = (payload?.result?.content ?? [])
+			.filter((part: any) => typeof part?.text === "string")
+			.map((part: any) => part.text)
+			.join("\n")
+			.trim();
+		return { text, elapsedMs: performance.now() - started };
 	}
-	const raw = await response.text();
-	if (!response.ok) {
-		throw new WebProviderError(`Exa HTTP ${response.status}: ${raw.slice(0, 300) || response.statusText}`, {
-			status: response.status,
-			retriable: response.status === 429 || response.status >= 500,
-		});
-	}
-	let payload: any;
-	try {
-		payload = parseMaybeSse(raw);
-	} catch (error) {
-		throw new WebProviderError("Exa returned invalid JSON", { cause: error });
-	}
-	if (payload?.error) throw new WebProviderError(`Exa MCP error: ${JSON.stringify(payload.error).slice(0, 500)}`);
-	const text = (payload?.result?.content ?? [])
-		.filter((part: any) => typeof part?.text === "string")
-		.map((part: any) => part.text)
-		.join("\n")
-		.trim();
-	return { text, elapsedMs: performance.now() - started };
 }
 
 function canonicalResultUrl(raw: string): string | undefined {
