@@ -19,24 +19,30 @@ export function titleModelConfigPath(): string {
 	return join(getAgentDir(), "auto-session-title.json");
 }
 
+const TITLE_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+type TitleThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
 export interface TitleModelConfig {
 	provider: string;
 	model: string;
+	thinkingLevel: TitleThinkingLevel;
 }
 
 /**
  * Resolve the provider/model used to generate titles. Override via
  * `auto-session-title.json` in Pi's agent directory:
  *
- *   { "provider": "mistral", "model": "mistral-medium-3.5" }
+ *   { "provider": "mistral", "model": "mistral-medium-3.5", "thinkingLevel": "minimal" }
  *
  * Any model available through Pi works; the extension uses Pi's provider-aware
  * completion API with your existing authentication. Defaults to Mistral Medium
- * 3.5.
+ * 3.5 with minimal thinking.
  */
 const DEFAULT_TITLE_MODEL: TitleModelConfig = {
 	provider: "mistral",
 	model: "mistral-medium-3.5",
+	thinkingLevel: "minimal",
 };
 
 let cachedConfig: TitleModelConfig | undefined;
@@ -56,7 +62,11 @@ export function loadTitleModelConfig(): TitleModelConfig {
 		const parsed = JSON.parse(readFileSync(path, "utf8"));
 		const provider = typeof parsed?.provider === "string" ? parsed.provider : DEFAULT_TITLE_MODEL.provider;
 		const model = typeof parsed?.model === "string" ? parsed.model : DEFAULT_TITLE_MODEL.model;
-		cachedConfig = { provider, model };
+		const configuredThinking = typeof parsed?.thinkingLevel === "string" ? parsed.thinkingLevel : parsed?.reasoning;
+		const thinkingLevel = TITLE_THINKING_LEVELS.has(configuredThinking)
+			? configuredThinking as TitleThinkingLevel
+			: DEFAULT_TITLE_MODEL.thinkingLevel;
+		cachedConfig = { provider, model, thinkingLevel };
 	} catch {
 		// Missing, unreadable, or malformed config all fall back to the default.
 		cachedConfig = DEFAULT_TITLE_MODEL;
@@ -173,7 +183,7 @@ export default function (pi: ExtensionAPI) {
 		generation: number,
 		signal: AbortSignal,
 	): Promise<string | undefined> => {
-		const { provider: PROVIDER, model: MODEL_ID } = loadTitleModelConfig();
+		const { provider: PROVIDER, model: MODEL_ID, thinkingLevel } = loadTitleModelConfig();
 		const configuredModel = ctx.modelRegistry.find(PROVIDER, MODEL_ID);
 		if (!configuredModel) {
 			lastSkipReason = `${PROVIDER}/${MODEL_ID} unavailable`;
@@ -199,6 +209,7 @@ export default function (pi: ExtensionAPI) {
 			prompt,
 			sessionId,
 			signal,
+			thinkingLevel,
 		);
 		if (signal.aborted) return;
 		const generated = parseTitleModelResponse(result);

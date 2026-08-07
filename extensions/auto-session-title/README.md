@@ -37,14 +37,18 @@ budget, while the prior 2 are bounded migration context.
 
 ## Config
 
-Defaults to Mistral Medium 3.5. Override the title-generation model via
+Defaults to Mistral Medium 3.5 with minimal thinking. Override the
+title-generation model and thinking level via
 `$PI_CODING_AGENT_DIR/auto-session-title.json` (defaults to
 `~/.pi/agent/auto-session-title.json`). Any model available through Pi works,
 including OAuth-backed providers such as OpenAI Codex:
 
 ```json
-{ "provider": "openai-codex", "model": "gpt-5.6-luna" }
+{ "provider": "openai-codex", "model": "gpt-5.6-luna", "thinkingLevel": "xhigh" }
 ```
+
+`thinkingLevel` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or
+`max`. The legacy `reasoning` key is also accepted.
 
 ## Commands
 

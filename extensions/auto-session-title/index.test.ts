@@ -21,10 +21,11 @@ describe("auto-session-title model requests", () => {
 			writeFileSync(join(directory, "auto-session-title.json"), JSON.stringify({
 				provider: "openai-codex",
 				model: "gpt-5.6-luna",
+				thinkingLevel: "xhigh",
 			}));
 
 			expect(titleModelConfigPath()).toBe(join(directory, "auto-session-title.json"));
-			expect(loadTitleModelConfig()).toEqual({ provider: "openai-codex", model: "gpt-5.6-luna" });
+			expect(loadTitleModelConfig()).toEqual({ provider: "openai-codex", model: "gpt-5.6-luna", thinkingLevel: "xhigh" });
 		} finally {
 			if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 			else process.env.PI_CODING_AGENT_DIR = previous;
@@ -57,6 +58,7 @@ describe("auto-session-title model requests", () => {
 			"title context",
 			"session-1",
 			new AbortController().signal,
+			"xhigh",
 		);
 
 		expect(response).toBe('{"title":"Luna Session Titles"}');
@@ -70,7 +72,7 @@ describe("auto-session-title model requests", () => {
 			headers: { "x-test": "header" },
 			env: { TEST_ENV: "value" },
 			maxTokens: 384,
-			reasoning: "minimal",
+			reasoning: "xhigh",
 			sessionId: "session-1:title",
 		});
 	});

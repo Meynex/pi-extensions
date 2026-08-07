@@ -23,6 +23,7 @@ export async function requestTitleCompletion(
 	prompt: string,
 	sessionId: string,
 	signal: AbortSignal,
+	reasoning: string,
 ): Promise<string> {
 	const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 	const requestSignal = AbortSignal.any([signal, timeout]);
@@ -41,7 +42,7 @@ export async function requestTitleCompletion(
 			headers: auth.headers,
 			env: auth.env,
 			maxTokens: 384,
-			reasoning: "minimal",
+			reasoning,
 			sessionId: `${sessionId}:title`,
 			signal: requestSignal,
 		},
