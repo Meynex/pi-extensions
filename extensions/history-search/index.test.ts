@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { createSubagentNavigationEditorFactory } from "../subagents/navigation";
 import historySearch from "./index";
 
 const identity = (text: string) => text;
@@ -12,6 +13,32 @@ const editorTheme = {
 		noMatch: identity,
 	},
 };
+
+test("preserves an earlier input decorator", () => {
+	const handlers = new Map<string, (...args: any[]) => any>();
+	historySearch({ on: (name: string, handler: any) => handlers.set(name, handler) } as any);
+	let opened = 0;
+	let currentFactory: any = createSubagentNavigationEditorFactory(undefined, () => {
+		opened += 1;
+		return true;
+	});
+	const ctx = {
+		mode: "tui",
+		sessionManager: { getBranch: () => [] },
+		ui: {
+			getEditorComponent: () => currentFactory,
+			setEditorComponent: (factory: any) => { currentFactory = factory; },
+		},
+	};
+	const tui = { terminal: { rows: 24, columns: 80 }, requestRender() {} };
+
+	handlers.get("session_start")?.({}, ctx);
+	const editor = currentFactory(tui, editorTheme, { matches: () => false });
+	// Application cursor mode is the sequence emitted by some terminals.
+	editor.handleInput("\x1bOC");
+
+	expect(opened).toBe(1);
+});
 
 test("searches newest matching prompts, cycles results, and restores drafts on cancel", () => {
 	const handlers = new Map<string, (...args: any[]) => any>();

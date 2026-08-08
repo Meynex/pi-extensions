@@ -1,8 +1,14 @@
 import { randomBytes } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { withReasoning } from "../better-native-pi/core.js";
 import { registerOverlayCard } from "../overlay-stack/index.js";
-import { TranscriptPager, type TranscriptEntry } from "../transcript/pager.js";
+import {
+	resolveTranscriptOverlayHeight,
+	TRANSCRIPT_OVERLAY_OPTIONS,
+	TranscriptPager,
+	type TranscriptEntry,
+} from "../transcript/pager.js";
 import {
 	compactContext,
 	createContextFork,
@@ -37,6 +43,7 @@ import {
 	type ManagedAgent,
 } from "./lifecycle.js";
 import { AgentMailbox, type AgentMailboxEvent } from "./mailbox.js";
+import { createSubagentNavigationEditorFactory } from "./navigation.js";
 import { createAgentPersistence, createMailboxPersistence } from "./persistence.js";
 import {
 	COMPLETION_MESSAGE_TYPE,
@@ -77,6 +84,7 @@ const MAX_QUEUED_CHILD_MESSAGES = 4;
 const MAX_REPORT_CHARS = 4_000;
 const MAX_AGENT_NAME_CHARS = 80;
 const OVERLAY_WIDTH = 58;
+const TRANSCRIPT_MODAL_ID = "subagents-transcript";
 
 const CHILD_PROMPT = `You are a delegated child agent working in an isolated conversation.
 Complete only the explicit task below.
@@ -157,6 +165,9 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	let spawnReservations = 0;
 	let compactedSnapshot: { key: string; promise: Promise<string> } | undefined;
 	let activeTranscriptRefresh: (() => void) | undefined;
+	let transcriptOpen = false;
+	let previousEditorFactory: any;
+	let installedEditorFactory: any;
 	let activeMailboxAnchor: number | undefined;
 	const mailbox = new AgentMailbox<AgentSnapshot>(
 		runtimeConfig.mailbox.maxMessageBytes,
@@ -189,25 +200,85 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		renderBody: (width, maxHeight, theme) => renderAgentsOverlayBody(activeAgents().map(snapshot), width, maxHeight, theme, mailbox.snapshot()),
 	});
 	const updateOverlay = () => overlayCard.invalidate();
+	const navigableAgents = () => [...agents.values()].filter((agent) => isActive(agent) || agent.status === "paused");
+	const adjacentNavigableAgent = (agent: ManagedAgent, direction: -1 | 1): ManagedAgent | undefined => {
+		const ordered = [...agents.values()];
+		const index = ordered.indexOf(agent);
+		if (index < 0) return undefined;
+		for (let candidate = index + direction; candidate >= 0 && candidate < ordered.length; candidate += direction) {
+			const next = ordered[candidate]!;
+			if (isActive(next) || next.status === "paused") return next;
+		}
+		return undefined;
+	};
+	const statusColor = (status: AgentSnapshot["status"]) => {
+		if (status === "starting" || status === "running") return "accent";
+		if (status === "completed") return "success";
+		if (status === "paused") return "warning";
+		if (status === "failed") return "error";
+		return "muted";
+	};
 	const showTranscript = async (agent: ManagedAgent, ctx: any) => {
+		if (transcriptOpen) return;
 		if (agent.cleanupComplete) {
 			ctx.ui.notify(`Transcript unavailable after ${agent.name} was closed.`, "info");
 			return;
 		}
-		let entries: TranscriptEntry[] = [childTaskEntry(agent)];
+		transcriptOpen = true;
+		let currentAgent = agent;
+		let entries: TranscriptEntry[] = [childTaskEntry(currentAgent)];
 		const loadEntries = () => {
-			try { entries = childTranscriptEntries(agent); }
+			try { entries = childTranscriptEntries(currentAgent); }
 			catch { /* Keep the last complete snapshot while the child appends. */ }
 			return entries;
 		};
+		pi.events.emit("modal-overlay", { id: TRANSCRIPT_MODAL_ID, hidden: true });
 		try {
 			await ctx.ui.custom((tui: any, theme: any, _kb: any, done: () => void) => {
+				const switchAgent = (next: ManagedAgent) => {
+					currentAgent = next;
+					entries = [childTaskEntry(currentAgent)];
+				};
 				const pager = new TranscriptPager(
 					loadEntries,
 					theme,
 					() => tui.requestRender(),
 					done,
-					{ title: `Agent transcript · ${agent.name}`, startAtEnd: true },
+					{
+						startAtEnd: true,
+						maxHeight: () => resolveTranscriptOverlayHeight(tui.terminal?.rows ?? process.stdout.rows ?? 24),
+						headerLines: (width) => {
+							const previous = adjacentNavigableAgent(currentAgent, -1);
+							const next = adjacentNavigableAgent(currentAgent, 1);
+							const left = theme.fg("text", `← ${previous?.name ?? "Parent"}`);
+							const activeLabel = theme.fg("text", theme.bold(` ${currentAgent.name} `));
+							const active = typeof theme.bg === "function" ? theme.bg("selectedBg", activeLabel) : `[${currentAgent.name}]`;
+							const right = next ? theme.fg("text", `${next.name} →`) : "";
+							const tabs = [left, active, right].filter(Boolean).join(theme.fg("dim", "  ·  "));
+							const status = theme.fg(statusColor(currentAgent.status), `${statusSymbol(currentAgent.status)} ${currentAgent.status}`);
+							const metadata = [status, theme.fg("muted", `${currentAgent.contextMode} context`), currentAgent.model ? theme.fg("dim", currentAgent.model) : ""]
+								.filter(Boolean).join(theme.fg("dim", "  ·  "));
+							const task = `${theme.fg("muted", "Task  ")}${theme.fg("text", compact(currentAgent.task, Math.max(1, width - 6)))}`;
+							const rule = theme.fg("border", "━".repeat(width));
+							return [tabs, metadata, task, rule].map((line) => truncateToWidth(line, width, "…"));
+						},
+						onPrevious: () => {
+							const previous = adjacentNavigableAgent(currentAgent, -1);
+							if (!previous) {
+								done();
+								return false;
+							}
+							switchAgent(previous);
+							return true;
+						},
+						onNext: () => {
+							const next = adjacentNavigableAgent(currentAgent, 1);
+							if (!next) return false;
+							switchAgent(next);
+							return true;
+						},
+						navigationHint: () => "←/→ agents",
+					},
 				);
 				activeTranscriptRefresh = () => {
 					pager.invalidate();
@@ -216,10 +287,12 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				return pager;
 			}, {
 				overlay: true,
-				overlayOptions: { width: "95%", maxHeight: "92%", anchor: "center", margin: 1 },
+				overlayOptions: TRANSCRIPT_OVERLAY_OPTIONS,
 			});
 		} finally {
+			pi.events.emit("modal-overlay", { id: TRANSCRIPT_MODAL_ID, hidden: false });
 			activeTranscriptRefresh = undefined;
+			transcriptOpen = false;
 		}
 	};
 	const resolveAgent = (nameOrLegacyId: string): ManagedAgent | undefined => {
@@ -866,6 +939,21 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		restorePersistedAgents(ctx);
 		restoreMailboxFinals(ctx);
 		updateOverlay();
+		if (ctx.mode === "tui") {
+			previousEditorFactory = ctx.ui.getEditorComponent();
+			installedEditorFactory = createSubagentNavigationEditorFactory(previousEditorFactory, () => {
+				const first = navigableAgents()[0];
+				if (!first || transcriptOpen) return false;
+				// Let the editor finish dispatching Right before the overlay takes focus.
+				queueMicrotask(() => {
+					void showTranscript(first, ctx).catch((error) => {
+						ctx.ui.notify(`Could not open ${first.name}: ${error instanceof Error ? error.message : String(error)}`, "error");
+					});
+				});
+				return true;
+			});
+			ctx.ui.setEditorComponent(installedEditorFactory);
+		}
 		for (const event of mailbox.peek()) queueMicrotask(() => deliverMailboxEvent(event));
 	});
 	pi.on("before_agent_start", () => {
@@ -903,9 +991,16 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		activeMailboxAnchor = undefined;
 		for (const event of mailbox.peek()) queueMicrotask(() => deliverMailboxEvent(event));
 	});
-	pi.on("session_shutdown", async (event) => {
+	pi.on("session_shutdown", async (event, ctx) => {
 		sessionActive = false;
 		parentRunning = false;
+		transcriptOpen = false;
+		activeTranscriptRefresh = undefined;
+		if (ctx.mode === "tui" && ctx.ui.getEditorComponent() === installedEditorFactory) {
+			ctx.ui.setEditorComponent(previousEditorFactory);
+		}
+		previousEditorFactory = undefined;
+		installedEditorFactory = undefined;
 		generation += 1;
 		compactedSnapshot = undefined;
 		mailbox.clear();

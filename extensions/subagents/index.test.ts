@@ -85,8 +85,11 @@ interface Harness {
 	sentMessages: Array<{ message: any; options: any }>;
 	statuses: Map<string, string | undefined>;
 	notifications: string[];
+	emittedEvents: Array<{ name: string; data: any }>;
 	overlay: OverlayRegistration;
 	ctx: any;
+	rootEditor: { getText(): string; setText(value: string): void; handleInput(data: string): void; delegated: string[] };
+	getEditorFactory(): any;
 	parent: SessionManager;
 	storageRoot: string;
 }
@@ -113,6 +116,7 @@ function createHarness(options: {
 	clientFactory?: AgentClientFactory;
 	parent?: SessionManager;
 	storageRoot?: string;
+	tui?: boolean;
 } = {}): Harness {
 	const tools = new Map<string, any>();
 	const commands = new Map<string, any>();
@@ -123,6 +127,15 @@ function createHarness(options: {
 	const sentMessages: Array<{ message: any; options: any }> = [];
 	const statuses = new Map<string, string | undefined>();
 	const notifications: string[] = [];
+	const emittedEvents: Array<{ name: string; data: any }> = [];
+	let rootEditorText = "";
+	const rootEditor = {
+		delegated: [] as string[],
+		getText: () => rootEditorText,
+		setText(value: string) { rootEditorText = value; },
+		handleInput(data: string) { rootEditor.delegated.push(data); },
+	};
+	let editorFactory: any = options.tui ? (() => rootEditor) : undefined;
 	const storageRoot = options.storageRoot ?? mkdtempSync(join(tmpdir(), "pi-subagents-test-"));
 	storageRoots.add(storageRoot);
 	const parent = options.parent ?? SessionManager.inMemory(process.cwd());
@@ -144,12 +157,15 @@ function createHarness(options: {
 	}
 	const ctx = {
 		cwd: process.cwd(),
+		mode: options.tui ? "tui" : undefined,
 		model: { provider: "test-provider", id: "test-model" },
 		sessionManager: parent,
 		ui: {
 			setStatus(key: string, value: string | undefined) { statuses.set(key, value); },
 			notify(message: string) { notifications.push(message); },
 			select: async () => undefined,
+			getEditorComponent: () => editorFactory,
+			setEditorComponent(factory: any) { editorFactory = factory; },
 		},
 	};
 	const pi = {
@@ -162,7 +178,10 @@ function createHarness(options: {
 		getThinkingLevel() { return "medium"; },
 		appendEntry(customType: string, data: any) { parent.appendCustomEntry(customType, data); },
 		sendMessage(message: any, messageOptions: any) { sentMessages.push({ message, options: messageOptions }); },
-		events: { emit() {}, on() { return () => {}; } },
+		events: {
+			emit(name: string, data: any) { emittedEvents.push({ name, data }); },
+			on() { return () => {}; },
+		},
 	};
 	let overlay: OverlayRegistration | undefined;
 	registerSubagents(pi as any, {
@@ -187,7 +206,10 @@ function createHarness(options: {
 		},
 	});
 	if (!overlay) throw new Error("Subagents overlay was not registered");
-	const harness = { tool: tools.get("agents"), commands, messageRenderers, entryRenderers, handlers, clients, sentMessages, statuses, notifications, overlay, ctx, parent, storageRoot };
+	const harness = {
+		tool: tools.get("agents"), commands, messageRenderers, entryRenderers, handlers, clients, sentMessages, statuses, notifications,
+		emittedEvents, overlay, ctx, rootEditor, getEditorFactory: () => editorFactory, parent, storageRoot,
+	};
 	harnesses.push(harness);
 	void handlers.get("session_start")?.({ reason: "startup" }, ctx);
 	return harness;
@@ -393,12 +415,15 @@ describe("subagents", () => {
 		const viewing = harness.commands.get("agents").handler("", harness.ctx);
 		await Bun.sleep(0);
 		const initial = rendered(component, 100).join("\n");
-		expect(initial).toContain(`Agent transcript · ${started.details.agents[0].name}`);
+		expect(initial).toContain(`← Parent  ·  [${started.details.agents[0].name}]`);
+		expect(initial).toContain("● running  ·  forked context  ·  test-provider/test-model");
+		expect(initial).toContain("Task  Inspect transcript behavior");
 		expect(initial).toContain("› Task\n  Inspect transcript behavior");
 		expect(initial).toContain("◆ Tool · read");
 		expect(initial).not.toContain("Original request");
 		expect(initial).not.toContain("You are a delegated child agent");
 		expect(overlayOptions).toMatchObject({ overlay: true, overlayOptions: { width: "95%", maxHeight: "92%" } });
+		expect(harness.emittedEvents.at(-1)).toEqual({ name: "modal-overlay", data: { id: "subagents-transcript", hidden: true } });
 
 		const toolResult = {
 			role: "toolResult",
@@ -413,6 +438,96 @@ describe("subagents", () => {
 		expect(renderRequests).toBeGreaterThan(0);
 		expect(rendered(component, 100).join("\n")).toContain("✓ Tool result · read\n  live child output");
 
+		component.handleInput("q");
+		await viewing;
+		expect(harness.emittedEvents.at(-1)).toEqual({ name: "modal-overlay", data: { id: "subagents-transcript", hidden: false } });
+	});
+
+	test("opens the first child with Right from an empty parent input", async () => {
+		const harness = createHarness({ tui: true });
+		const first = await spawnAgent(harness, "First retained transcript");
+		const second = await spawnAgent(harness, "Second retained transcript");
+		let component: any;
+		harness.ctx.ui.custom = async (factory: any) => {
+			await new Promise<void>((resolve) => {
+				component = factory({ requestRender() {} }, renderTheme, {}, resolve);
+			});
+		};
+		const editor = harness.getEditorFactory()({}, {}, {});
+
+		editor.handleInput("\x1b[C");
+		await Bun.sleep(0);
+		expect(rendered(component, 100).join("\n")).toContain(`[${first.details.agents[0].name}]  ·  ${second.details.agents[0].name} →`);
+
+		component.handleInput("\x1b[D");
+		await Bun.sleep(0);
+	});
+
+	test("keeps completed children out of keyboard navigation", async () => {
+		const harness = createHarness({ tui: true });
+		await spawnAgent(harness, "Completed retained transcript");
+		harness.clients[0].complete("Done");
+		await Bun.sleep(0);
+		let customCalls = 0;
+		harness.ctx.ui.custom = async () => { customCalls += 1; };
+		const editor = harness.getEditorFactory()({}, {}, {});
+
+		editor.handleInput("\x1b[C");
+		await Bun.sleep(0);
+		expect(customCalls).toBe(0);
+		expect(harness.rootEditor.delegated).toEqual(["\x1b[C"]);
+	});
+
+	test("moves between child transcripts without cycling", async () => {
+		const harness = createHarness();
+		const first = await spawnAgent(harness, "First transcript task");
+		const second = await spawnAgent(harness, "Second transcript task");
+		let component: any;
+		harness.ctx.ui.select = async (_title: string, labels: string[]) => labels.find((label) => label.includes(first.details.agents[0].name));
+		harness.ctx.ui.custom = async (factory: any) => {
+			await new Promise<void>((resolve) => {
+				component = factory({ requestRender() {} }, renderTheme, {}, resolve);
+			});
+		};
+
+		const viewing = harness.commands.get("agents").handler("", harness.ctx);
+		await Bun.sleep(0);
+		expect(rendered(component, 100).join("\n")).toContain(`[${first.details.agents[0].name}]  ·  ${second.details.agents[0].name} →`);
+
+		component.handleInput("\x1b[C");
+		expect(rendered(component, 100).join("\n")).toContain(`← ${first.details.agents[0].name}  ·  [${second.details.agents[0].name}]`);
+		component.handleInput("\x1b[C");
+		expect(rendered(component, 100).join("\n")).toContain(`← ${first.details.agents[0].name}  ·  [${second.details.agents[0].name}]`);
+
+		component.handleInput("\x1b[D");
+		expect(rendered(component, 100).join("\n")).toContain(`[${first.details.agents[0].name}]  ·  ${second.details.agents[0].name} →`);
+		component.handleInput("\x1b[D");
+		await viewing;
+	});
+
+	test("keeps the final transcript visible and can move to the next running child", async () => {
+		const harness = createHarness();
+		const first = await spawnAgent(harness, "Finishing transcript task");
+		const second = await spawnAgent(harness, "Still running transcript task");
+		let component: any;
+		harness.ctx.ui.select = async (_title: string, labels: string[]) => labels.find((label) => label.includes(first.details.agents[0].name));
+		harness.ctx.ui.custom = async (factory: any) => {
+			await new Promise<void>((resolve) => {
+				component = factory({ requestRender() {} }, renderTheme, {}, resolve);
+			});
+		};
+
+		const viewing = harness.commands.get("agents").handler("", harness.ctx);
+		await Bun.sleep(0);
+		const firstSessionPath = harness.clients[0].options.args[harness.clients[0].options.args.indexOf("--session") + 1];
+		SessionManager.open(firstSessionPath).appendMessage(assistant("Finished while open"));
+		harness.clients[0].complete("Finished while open");
+		await Bun.sleep(0);
+		expect(rendered(component, 100).join("\n")).toContain("✓ completed");
+		expect(rendered(component, 100).join("\n")).toContain("● Agent\n  Finished while open");
+
+		component.handleInput("\x1b[C");
+		expect(rendered(component, 100).join("\n")).toContain(`[${second.details.agents[0].name}]`);
 		component.handleInput("q");
 		await viewing;
 	});

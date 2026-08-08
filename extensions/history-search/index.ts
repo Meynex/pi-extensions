@@ -12,105 +12,85 @@ function userText(entry: any): string | undefined {
 	return text.trim() || undefined;
 }
 
-class HistoryEditor extends CustomEditor {
-	private searching = false;
-	private query = "";
-	private original = "";
-	private matches: string[] = [];
-	private matchIndex = 0;
-	// The editor we wrap (e.g. accent-color's border-locking wrapper).
-	// When not reverse-searching, delegate input/render to it so its border
-	// styling and any other customizations remain in effect.
-	private readonly delegate: CustomEditor | undefined;
+export function createHistorySearchEditorFactory(previousFactory: any, prompts: string[]) {
+	return (tui: any, theme: any, keybindings: any) => {
+		const editor: CustomEditor = previousFactory
+			? previousFactory(tui, theme, keybindings)
+			: new CustomEditor(tui, theme, keybindings);
+		const handleInput = editor.handleInput.bind(editor);
+		const render = editor.render.bind(editor);
+		let searching = false;
+		let query = "";
+		let original = "";
+		let matches: string[] = [];
+		let matchIndex = 0;
 
-	constructor(tui: any, theme: any, keybindings: any, private readonly prompts: string[],
-		previousFactory?: any) {
-		super(tui, theme, keybindings);
-		this.delegate = previousFactory
-			? (() => {
-				try { return previousFactory(tui, theme, keybindings); }
-				catch { return undefined; }
-			})()
-			: undefined;
+		const refreshMatches = (reset = false) => {
+			const normalizedQuery = query.toLowerCase();
+			matches = normalizedQuery
+				? [...prompts].reverse().filter((prompt, index, all) => prompt.toLowerCase().includes(normalizedQuery) && all.indexOf(prompt) === index)
+				: [];
+			if (reset) matchIndex = 0;
+			if (matches.length) editor.setText(matches[matchIndex % matches.length]!);
+			else editor.setText(original);
+			tui.requestRender();
+		};
+		const beginSearch = () => {
+			searching = true;
+			query = "";
+			original = editor.getText();
+			matches = [];
+			matchIndex = 0;
+			tui.requestRender();
+		};
+		const cancelSearch = () => {
+			searching = false;
+			editor.setText(original);
+			tui.requestRender();
+		};
+		const acceptSearch = () => {
+			searching = false;
+			tui.requestRender();
+		};
 
-		// Forward borderColor to the wrapped editor. accent-color locks
-		// borderColor via a no-op setter so pi's border updates are ignored;
-		// without this proxy, pi would see our plain CustomEditor border and
-		// overwrite it with the default on every editor swap.
-		if (this.delegate) {
-			Object.defineProperty(this, "borderColor", {
-				configurable: true,
-				enumerable: true,
-				get: () => (this.delegate as any).borderColor,
-				set: (value: any) => { (this.delegate as any).borderColor = value; },
-			});
-		}
-	}
+		editor.handleInput = (data: string) => {
+			if (!searching && matchesKey(data, "ctrl+r")) return beginSearch();
+			if (!searching) return handleInput(data);
 
-	private refreshMatches(reset = false) {
-		const query = this.query.toLowerCase();
-		this.matches = query
-			? [...this.prompts].reverse().filter((prompt, index, all) => prompt.toLowerCase().includes(query) && all.indexOf(prompt) === index)
-			: [];
-		if (reset) this.matchIndex = 0;
-		if (this.matches.length) this.setText(this.matches[this.matchIndex % this.matches.length]);
-		else this.setText(this.original);
-		this.tui.requestRender();
-	}
-	private beginSearch() {
-		this.searching = true;
-		this.query = "";
-		this.original = this.getText();
-		this.matches = [];
-		this.matchIndex = 0;
-		this.tui.requestRender();
-	}
-	private cancelSearch() {
-		this.searching = false;
-		this.setText(this.original);
-		this.tui.requestRender();
-	}
-	private acceptSearch() {
-		this.searching = false;
-		this.tui.requestRender();
-	}
+			if (matchesKey(data, Key.escape) || matchesKey(data, "ctrl+c")) return cancelSearch();
+			if (matchesKey(data, Key.enter)) return acceptSearch();
+			if (matchesKey(data, "ctrl+r") || matchesKey(data, Key.up)) {
+				if (matches.length) matchIndex = (matchIndex + 1) % matches.length;
+				return refreshMatches();
+			}
+			if (matchesKey(data, "ctrl+s") || matchesKey(data, Key.down)) {
+				if (matches.length) matchIndex = (matchIndex - 1 + matches.length) % matches.length;
+				return refreshMatches();
+			}
+			if (matchesKey(data, Key.backspace) || data === "\x7f") {
+				query = query.slice(0, -1);
+				return refreshMatches(true);
+			}
+			if (matchesKey(data, "ctrl+u")) {
+				query = "";
+				return refreshMatches(true);
+			}
+			if (data.length === 1 && data.charCodeAt(0) >= 32) {
+				query += data;
+				return refreshMatches(true);
+			}
+		};
 
-	handleInput(data: string): void {
-		if (!this.searching && matchesKey(data, "ctrl+r")) return this.beginSearch();
-		if (!this.searching) return super.handleInput(data);
-
-		if (matchesKey(data, Key.escape) || matchesKey(data, "ctrl+c")) return this.cancelSearch();
-		if (matchesKey(data, Key.enter)) return this.acceptSearch();
-		if (matchesKey(data, "ctrl+r") || matchesKey(data, Key.up)) {
-			if (this.matches.length) this.matchIndex = (this.matchIndex + 1) % this.matches.length;
-			return this.refreshMatches();
-		}
-		if (matchesKey(data, "ctrl+s") || matchesKey(data, Key.down)) {
-			if (this.matches.length) this.matchIndex = (this.matchIndex - 1 + this.matches.length) % this.matches.length;
-			return this.refreshMatches();
-		}
-		if (matchesKey(data, Key.backspace) || data === "\x7f") {
-			this.query = this.query.slice(0, -1);
-			return this.refreshMatches(true);
-		}
-		if (matchesKey(data, "ctrl+u")) {
-			this.query = "";
-			return this.refreshMatches(true);
-		}
-		if (data.length === 1 && data.charCodeAt(0) >= 32) {
-			this.query += data;
-			return this.refreshMatches(true);
-		}
-	}
-
-	render(width: number): string[] {
-		const lines = super.render(width);
-		if (!this.searching) return lines;
-		const status = !this.query ? "" : this.matches.length ? `${this.matchIndex + 1}/${this.matches.length}` : "no match";
-		const footer = `reverse-i-search: ${this.query}${status ? `  ${status}` : ""}  Enter accept · Esc cancel`;
-		lines.push(truncateToWidth(footer, width, "…"));
-		return lines;
-	}
+		editor.render = (width: number) => {
+			const lines = render(width);
+			if (!searching) return lines;
+			const status = !query ? "" : matches.length ? `${matchIndex + 1}/${matches.length}` : "no match";
+			const footer = `reverse-i-search: ${query}${status ? `  ${status}` : ""}  Enter accept · Esc cancel`;
+			lines.push(truncateToWidth(footer, width, "…"));
+			return lines;
+		};
+		return editor;
+	};
 }
 
 export default function (pi: ExtensionAPI) {
@@ -128,8 +108,7 @@ export default function (pi: ExtensionAPI) {
 		if (ctx.mode !== "tui") return;
 		prompts = ctx.sessionManager.getBranch().map(userText).filter((text): text is string => Boolean(text));
 		previousFactory = ctx.ui.getEditorComponent();
-		installedFactory = (tui: any, theme: any, keybindings: any) =>
-			new HistoryEditor(tui, theme, keybindings, prompts, previousFactory);
+		installedFactory = createHistorySearchEditorFactory(previousFactory, prompts);
 		ctx.ui.setEditorComponent(installedFactory);
 	});
 	pi.on("session_shutdown", (_event, ctx) => {

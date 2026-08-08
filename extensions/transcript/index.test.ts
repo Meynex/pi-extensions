@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import transcript from "./index";
 import { resolveTranscriptOverlayHeight, TranscriptPager } from "./pager";
 
@@ -53,6 +54,23 @@ test("opens a cleaned scrollable transcript from both command and shortcut", asy
 	expect(overlayOptions.overlay).toBe(true);
 	component.handleInput("q");
 	expect(closed).toBe(true);
+});
+
+test("paints an opaque surface with clear entry separators", () => {
+	const entries = [
+		{ type: "message", message: { role: "user", content: "Inspect this" } },
+		{ type: "message", message: { role: "assistant", content: "Done" } },
+	];
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bg: (_color: string, text: string) => `\x1b[48;5;0m${text}\x1b[49m`,
+	};
+	const pager = new TranscriptPager(() => entries, theme, () => {}, () => {}, { maxHeight: () => 10 });
+	const lines = pager.render(40);
+
+	expect(lines).toHaveLength(10);
+	expect(lines.every((line) => line.startsWith("\x1b[48;5;0m") && visibleWidth(line) === 40)).toBe(true);
+	expect(lines.join("\n")).toContain("─".repeat(40));
 });
 
 test("resolved pager height matches the percentage and margin overlay budget", () => {
