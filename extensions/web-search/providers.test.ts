@@ -63,6 +63,23 @@ describe("provider normalization", () => {
 		}
 	});
 
+	test("falls back immediately when Retry-After exceeds the retry budget", async () => {
+		const previousFetch = globalThis.fetch;
+		const random = spyOn(Math, "random").mockReturnValue(0);
+		let calls = 0;
+		globalThis.fetch = (async () => {
+			calls++;
+			return new Response("long rate limit", { status: 429, headers: { "Retry-After": "300" } });
+		}) as typeof fetch;
+		try {
+			await expect(searchExaWeb({ query: "retry test" })).rejects.toThrow("Exa HTTP 429");
+			expect(calls).toBe(1);
+		} finally {
+			globalThis.fetch = previousFetch;
+			random.mockRestore();
+		}
+	});
+
 	test("normalizes Firecrawl web and news records", () => {
 		const results = parseFirecrawlItems([
 			{ url: "https://example.com/a", title: "A", description: "Web description" },

@@ -25,9 +25,10 @@ opening. Mistral article IDs are still opened with Mistral directly when
 configured.
 
 Fallbacks happen after timeouts, rate limits, server failures, blocked pages,
-empty content, or empty search results. Exa retries HTTP 429 responses six times,
+empty content, or empty search results. Exa has up to six HTTP 429 retry slots,
 using `Retry-After` when available or exponential delays of roughly 1, 2, 4, 8,
-16, and 32 seconds with jitter. A final 429 falls back to the next provider.
+16, and 32 seconds with jitter. The complete Exa attempt has a 30-second budget.
+A delay beyond the remaining budget falls back immediately to the next provider.
 Future calls try Exa again without a cross-request cooldown.
 
 ## Access

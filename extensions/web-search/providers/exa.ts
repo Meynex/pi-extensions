@@ -17,6 +17,7 @@ import type {
 const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
 const DEFAULT_TIMEOUT_MS = 20_000;
 const RATE_LIMIT_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 32_000] as const;
+const RATE_LIMIT_RETRY_BUDGET_MS = 30_000;
 const RATE_LIMIT_JITTER_MS = 500;
 
 function endpoint(): string {
@@ -62,13 +63,16 @@ async function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void
 async function callExa(tool: string, args: Record<string, unknown>, options: ProviderOptions = {}): Promise<{ text: string; elapsedMs: number }> {
 	const started = performance.now();
 	for (let attempt = 0; ; attempt++) {
+		const remainingBudgetMs = RATE_LIMIT_RETRY_BUDGET_MS - (performance.now() - started);
+		if (remainingBudgetMs <= 0) throw new WebProviderError("Exa retry budget exhausted");
+		const requestTimeoutMs = Math.max(1, Math.min(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, Math.floor(remainingBudgetMs)));
 		let response: Response;
 		try {
 			response = await fetch(endpoint(), {
 				method: "POST",
 				headers: { Accept: "application/json, text/event-stream", "Content-Type": "application/json" },
 				body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "tools/call", params: { name: tool, arguments: args } }),
-				signal: combineSignals(options.signal, options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+				signal: combineSignals(options.signal, requestTimeoutMs),
 			});
 		} catch (error) {
 			if (options.signal?.aborted) throw options.signal.reason ?? error;
@@ -78,8 +82,12 @@ async function callExa(tool: string, args: Record<string, unknown>, options: Pro
 		if (response.status === 429 && attempt < RATE_LIMIT_RETRY_DELAYS_MS.length) {
 			const delayMs = retryAfterMs(response) ?? RATE_LIMIT_RETRY_DELAYS_MS[attempt]!;
 			const jitterMs = Math.floor(Math.random() * (RATE_LIMIT_JITTER_MS + 1));
-			await waitForRetry(delayMs + jitterMs, options.signal);
-			continue;
+			const totalDelayMs = delayMs + jitterMs;
+			const remainingBudgetMs = RATE_LIMIT_RETRY_BUDGET_MS - (performance.now() - started);
+			if (totalDelayMs < remainingBudgetMs) {
+				await waitForRetry(totalDelayMs, options.signal);
+				continue;
+			}
 		}
 		if (!response.ok) {
 			throw new WebProviderError(`Exa HTTP ${response.status}: ${raw.slice(0, 300) || response.statusText}`, {
