@@ -23,10 +23,6 @@ export function compactProviderError(error: unknown): string {
 		.slice(0, 300) || "Unknown provider error";
 }
 
-export function providerStatus(error: unknown): number | undefined {
-	return error instanceof WebProviderError ? error.status : undefined;
-}
-
 export function isRetriableProviderError(error: unknown): boolean {
 	if (error instanceof WebProviderError) return error.retriable || error.blocked;
 	return true;

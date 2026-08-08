@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { compactProviderError, isRetriableProviderError, providerStatus, WebProviderError } from "./provider-error";
+import { compactProviderError, isRetriableProviderError, WebProviderError } from "./provider-error";
 import { openExaUrl, searchExaNews, searchExaWeb } from "./providers/exa";
 import { hasFirecrawlAccess, openFirecrawlUrl, searchFirecrawlNews, searchFirecrawlWeb } from "./providers/firecrawl";
 import { hasMistralAccess, openMistralUrl, searchMistralNews, searchMistralWeb } from "./providers/mistral";
@@ -14,9 +14,7 @@ import type {
 	WebSearchResult,
 } from "./types";
 
-const CIRCUIT_MS = 60_000;
 const DEFAULT_PROVIDER_ORDER: WebProvider[] = ["exa", "firecrawl", "mistral"];
-const circuits = new Map<string, number>();
 
 function normalizedProvider(value: string | undefined): WebProvider | undefined {
 	const normalized = value?.trim().toLowerCase();
@@ -39,23 +37,6 @@ function ordered(overrideName: string, preferredProvider?: string): WebProvider[
 	return [...new Set([preferred, override, ...DEFAULT_PROVIDER_ORDER].filter((provider): provider is WebProvider => Boolean(provider)))].filter(available);
 }
 
-function circuitKey(operation: string, provider: WebProvider): string {
-	return `${operation}:${provider}`;
-}
-
-function circuitOpen(operation: string, provider: WebProvider): boolean {
-	const until = circuits.get(circuitKey(operation, provider)) ?? 0;
-	if (until <= Date.now()) {
-		circuits.delete(circuitKey(operation, provider));
-		return false;
-	}
-	return true;
-}
-
-function tripCircuit(operation: string, provider: WebProvider, error: unknown): void {
-	if (providerStatus(error) === 429) circuits.set(circuitKey(operation, provider), Date.now() + CIRCUIT_MS);
-}
-
 function totalCredits(attempts: ProviderAttempt[]): number | undefined {
 	const credits = attempts.reduce((sum, attempt) => sum + (attempt.creditsUsed ?? 0), 0);
 	return credits > 0 ? credits : undefined;
@@ -75,10 +56,6 @@ export async function routeSearch<T extends WebSearchResult | NewsSearchResult>(
 	const attempts: ProviderAttempt[] = [];
 	let emptyResult: T | undefined;
 	for (const provider of providers) {
-		if (circuitOpen(operation, provider)) {
-			attempts.push({ provider, status: "skipped", elapsedMs: 0, error: "temporarily disabled after rate limiting" });
-			continue;
-		}
 		const attemptStarted = performance.now();
 		try {
 			const result = await call(provider);
@@ -98,7 +75,6 @@ export async function routeSearch<T extends WebSearchResult | NewsSearchResult>(
 			if (error instanceof DOMException && error.name === "AbortError") throw error;
 			const elapsedMs = performance.now() - attemptStarted;
 			attempts.push({ provider, status: "failed", elapsedMs, error: compactProviderError(error) });
-			tripCircuit(operation, provider, error);
 			if (!isRetriableProviderError(error)) break;
 		}
 	}
@@ -147,10 +123,6 @@ export async function openUrl(url: string, options: ProviderOptions = {}, prefer
 	const started = performance.now();
 	const attempts: ProviderAttempt[] = [];
 	for (const provider of providers) {
-		if (circuitOpen("open_url", provider)) {
-			attempts.push({ provider, status: "skipped", elapsedMs: 0, error: "temporarily disabled after rate limiting" });
-			continue;
-		}
 		const attemptStarted = performance.now();
 		try {
 			const result = provider === "exa"
@@ -168,7 +140,6 @@ export async function openUrl(url: string, options: ProviderOptions = {}, prefer
 		} catch (error) {
 			if (error instanceof DOMException && error.name === "AbortError") throw error;
 			attempts.push({ provider, status: "failed", elapsedMs: performance.now() - attemptStarted, error: compactProviderError(error) });
-			tripCircuit("open_url", provider, error);
 			if (!isRetriableProviderError(error)) break;
 		}
 	}
@@ -176,7 +147,6 @@ export async function openUrl(url: string, options: ProviderOptions = {}, prefer
 }
 
 export function webStatus() {
-	const now = Date.now();
 	return {
 		providers: {
 			exa: { available: true, keyed: Boolean(process.env.EXA_API_KEY?.trim()) },
@@ -188,10 +158,5 @@ export function webStatus() {
 			news: newsProviderOrder(),
 			open: openProviderOrder("https://example.com"),
 		},
-		circuits: [...circuits.entries()].filter(([, until]) => until > now).map(([key, until]) => ({ key, retryInMs: until - now })),
 	};
-}
-
-export function resetRouterStateForTests(): void {
-	circuits.clear();
 }

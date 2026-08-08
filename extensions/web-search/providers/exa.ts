@@ -16,7 +16,7 @@ import type {
 
 const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
 const DEFAULT_TIMEOUT_MS = 20_000;
-const RATE_LIMIT_RETRY_DELAYS_MS = [1_000, 2_000] as const;
+const RATE_LIMIT_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 32_000] as const;
 const RATE_LIMIT_JITTER_MS = 500;
 
 function endpoint(): string {

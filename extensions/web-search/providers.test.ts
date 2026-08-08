@@ -24,13 +24,13 @@ describe("provider normalization", () => {
 		expect(results[1]?.rank).toBe(2);
 	});
 
-	test("retries Exa rate limits twice before succeeding", async () => {
+	test("retries Exa rate limits six times before succeeding", async () => {
 		const previousFetch = globalThis.fetch;
 		const random = spyOn(Math, "random").mockReturnValue(0);
 		let calls = 0;
 		globalThis.fetch = (async () => {
 			calls++;
-			if (calls < 3) return new Response("rate limited", { status: 429, headers: { "Retry-After": "0" } });
+			if (calls < 7) return new Response("rate limited", { status: 429, headers: { "Retry-After": "0" } });
 			return new Response(JSON.stringify({
 				jsonrpc: "2.0",
 				result: { content: [{ type: "text", text: "Title: Docs\nURL: https://example.com/docs\nHighlights:\nFound after retry." }] },
@@ -38,7 +38,7 @@ describe("provider normalization", () => {
 		}) as typeof fetch;
 		try {
 			const result = await searchExaWeb({ query: "retry test" });
-			expect(calls).toBe(3);
+			expect(calls).toBe(7);
 			expect(result.results[0]).toMatchObject({ url: "https://example.com/docs", title: "Docs" });
 		} finally {
 			globalThis.fetch = previousFetch;
@@ -46,7 +46,7 @@ describe("provider normalization", () => {
 		}
 	});
 
-	test("surfaces an Exa rate limit after three attempts", async () => {
+	test("surfaces an Exa rate limit after seven attempts", async () => {
 		const previousFetch = globalThis.fetch;
 		const random = spyOn(Math, "random").mockReturnValue(0);
 		let calls = 0;
@@ -56,7 +56,7 @@ describe("provider normalization", () => {
 		}) as typeof fetch;
 		try {
 			await expect(searchExaWeb({ query: "retry test" })).rejects.toThrow("Exa HTTP 429");
-			expect(calls).toBe(3);
+			expect(calls).toBe(7);
 		} finally {
 			globalThis.fetch = previousFetch;
 			random.mockRestore();

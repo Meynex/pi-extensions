@@ -441,8 +441,7 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 				`news: ${status.routes.news.join(" → ") || "none"}`,
 				`open: ${status.routes.open.join(" → ") || "none"}`,
 			];
-			const circuits = status.circuits.length ? `\nrate limited: ${status.circuits.map((item) => item.key).join(", ")}` : "";
-			ctx.ui.notify(`${routes.join("\n")}\n${access}${circuits}`, "info");
+			ctx.ui.notify(`${routes.join("\n")}\n${access}`, "info");
 		},
 	});
 }

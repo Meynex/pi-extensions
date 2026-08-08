@@ -6,7 +6,6 @@ import { WebProviderError } from "./provider-error";
 import {
 	newsProviderOrder,
 	openProviderOrder,
-	resetRouterStateForTests,
 	routeSearch,
 	webProviderOrder,
 	webStatus,
@@ -56,7 +55,6 @@ function result(provider: WebProvider, count = 1): WebSearchResult {
 
 describe("provider router", () => {
 	test("falls back sequentially and records each attempt", async () => {
-		resetRouterStateForTests();
 		const calls: WebProvider[] = [];
 		const routed = await routeSearch("web_search", ["exa", "firecrawl"], async (provider) => {
 			calls.push(provider);
@@ -73,14 +71,12 @@ describe("provider router", () => {
 	});
 
 	test("falls back after empty results", async () => {
-		resetRouterStateForTests();
 		const routed = await routeSearch("web_search", ["exa", "firecrawl"], async (provider) => result(provider, provider === "exa" ? 0 : 1));
 		expect(routed.provider).toBe("firecrawl");
 		expect(routed.attempts?.map((attempt) => attempt.status)).toEqual(["empty", "success"]);
 	});
 
 	test("does not continue after a non-retriable input error", async () => {
-		resetRouterStateForTests();
 		const calls: WebProvider[] = [];
 		await expect(routeSearch("web_search", ["exa", "firecrawl"], async (provider) => {
 			calls.push(provider);
@@ -89,8 +85,7 @@ describe("provider router", () => {
 		expect(calls).toEqual(["exa"]);
 	});
 
-	test("temporarily skips a provider after rate limiting", async () => {
-		resetRouterStateForTests();
+	test("tries a rate-limited provider again on the next search", async () => {
 		await routeSearch("web_search", ["exa", "firecrawl"], async (provider) => {
 			if (provider === "exa") throw new WebProviderError("rate limited", { status: 429 });
 			return result(provider);
@@ -100,8 +95,9 @@ describe("provider router", () => {
 			calls.push(provider);
 			return result(provider);
 		});
-		expect(calls).toEqual(["firecrawl"]);
-		expect(routed.attempts?.[0]).toMatchObject({ provider: "exa", status: "skipped" });
+		expect(calls).toEqual(["exa"]);
+		expect(routed.provider).toBe("exa");
+		expect(routed.attempts?.[0]).toMatchObject({ provider: "exa", status: "success" });
 	});
 
 	test("omits Firecrawl and Mistral when credentials are missing", () => {
