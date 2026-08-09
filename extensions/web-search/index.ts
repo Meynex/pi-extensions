@@ -48,7 +48,7 @@ const newsSearchSchema = Type.Object({
 const openUrlSchema = Type.Object({
 	url: Type.String({
 		minLength: 1,
-		description: "URL or news article ID returned by web_search or news_search.",
+		description: "Public PDF URL, Mistral article ID, or HTTP(S) URL whose local ax retrieval was unavailable, blocked, empty, or poor.",
 	}),
 	provider: providerPreferenceSchema,
 });
@@ -378,8 +378,8 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 			"Search the web through a quality-routed provider chain. Returns bounded structured results with URLs, titles, unique snippets, ranks, websites, provider attempts, and source metadata; it does not generate a final answer.",
 		promptSnippet: "Search the web through quality-routed providers and return structured results",
 		promptGuidelines: [
-			"Use web_search for current or potentially changed external information—not local code—and prefer official or primary sources.",
-			"Treat web_search and news_search as evidence retrieval: inspect important sources and cite the URLs used.",
+			"Use web_search for current external information and prefer official or primary sources.",
+			"Use snippets when sufficient. For needed HTML, use targeted local ax for facts or `ax URL --md --budget 800` for broad reading; do not raise budgets to find facts. Use open_url only after ax fails; cite URLs.",
 		],
 		parameters: webSearchSchema,
 		renderShell: "self",
@@ -412,11 +412,11 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		name: "open_url",
 		label: "Open URL",
 		description:
-			"Fallback for opening an HTTP(S) URL through Exa, Firecrawl, or Mistral after local content retrieval fails. Mistral article IDs remain supported when configured.",
-		promptSnippet: "Fallback opener for a URL when local content retrieval with tools like `ax` fails",
+			"Open a public remote PDF or Mistral article ID. For HTML, use this remote Exa, Firecrawl, or Mistral fallback only after local ax retrieval is unavailable, blocked, empty, or poor.",
+		promptSnippet: "Open a public remote PDF or retry a URL after local ax retrieval fails",
 		promptGuidelines: [
-			"Use open_url only when local content retrieval such as ax is unavailable, blocked, or fails.",
-			"Use curl for protocol-level HTTP diagnostics; use ax or open_url for readable page content.",
+			"Use open_url for public PDFs or Mistral article IDs; for HTML, only after ax is unavailable, blocked, empty, or poor.",
+			"Use curl only for protocol-level HTTP diagnostics. Do not batch open_url as an initial HTML fetch.",
 		],
 		parameters: openUrlSchema,
 		renderShell: "self",

@@ -117,10 +117,14 @@ describe("web tool prompt guidance", () => {
 		expect(text.length).toBeLessThanOrEqual(600);
 		expect(text).toContain("official or primary sources");
 		expect(text).toContain("recent events");
-		expect(text).toContain("local content retrieval");
+		expect(text).toContain("snippets when sufficient");
+		expect(text).toContain("ax URL --md --budget 800");
+		expect(text).toContain("public PDFs");
 		expect(text).toContain("protocol-level HTTP diagnostics");
-		expect(text).toContain("cite the URLs used");
+		expect(text).toContain("cite URLs");
+		expect(text).not.toContain("ax or open_url");
 		expect(text).not.toContain("provider unset");
+		expect(openUrl.parameters.url.description).not.toContain("returned by web_search");
 		for (const tool of [webSearch, newsSearch, openUrl]) {
 			expect(tool.parameters.provider.description).toContain("Leave unset unless a provider-specific retry is needed");
 		}

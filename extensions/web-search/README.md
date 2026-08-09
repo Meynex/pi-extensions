@@ -60,10 +60,14 @@ temporarily paused after rate limiting. Credential values are never shown.
 
 ## Fetch policy
 
-After search discovery, use local `ax` for readable page fetches. Use `curl` for
-protocol-level HTTP diagnostics such as headers, redirects, TLS, auth,
-robots/sitemaps, or API reproduction. Use `open_url` only as a remote fallback
-when local content retrieval is unavailable, blocked, or produces poor content.
+Stop when search snippets provide enough evidence. Open only sources needed to
+close a specific evidence gap. For HTML, use targeted local `ax` extraction for
+specific facts or bounded Markdown for broad reading. Use `curl` for
+protocol-level HTTP diagnostics such as
+headers, redirects, TLS, auth, robots/sitemaps, or API reproduction. Use
+`open_url` for public remote PDFs and Mistral article IDs, or as a remote HTML
+fallback when local extraction is unavailable, blocked, empty, or poor. Do not
+batch `open_url` as the initial HTML fetch.
 
 ## Results
 
