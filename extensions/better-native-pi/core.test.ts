@@ -5,7 +5,7 @@ import { buildToolBlock, renderCommandOutput, REASONING_DESCRIPTION, withReasoni
 
 const ANSI_PATTERN = /\x1b\[[0-9;:]*m/g;
 const OSC8_PATTERN = /\x1b\]8;;.*?(?:\x07|\x1b\\)/g;
-const TEST_TAG_PATTERN = /<link:[^>]+>|<\/link>|<\/?(?:bold|green|magenta|red)>|<\/>/g;
+const TEST_TAG_PATTERN = /<link:[^>]+>|<\/link>|<\/?(?:bold|cyan|dim|green|magenta|red)>|<\/>/g;
 
 function plain(text: string): string {
 	return text.replace(ANSI_PATTERN, "").replace(OSC8_PATTERN, "").replace(TEST_TAG_PATTERN, "");

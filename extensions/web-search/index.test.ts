@@ -44,16 +44,30 @@ mock.module("@earendil-works/pi-tui", () => ({
 		return lines;
 	},
 }));
+function mockGrepSummary(result: any) {
+	const text = result?.content?.find((part: any) => part?.type === "text")?.text ?? "";
+	if (/^No matches found/.test(text.trim())) return { matches: 0, files: 0, lowerBound: false };
+	const entries = text.split("\n").map((line: string) => line.match(/^(.+):\d+:/)).filter(Boolean) as RegExpMatchArray[];
+	const limit = Number.isInteger(result?.details?.matchLimitReached) ? result.details.matchLimitReached : undefined;
+	const matches = Math.max(entries.length, limit ?? 0);
+	return matches > 0 ? { matches, files: new Set(entries.map((match) => match[1])).size, lowerBound: Boolean(limit) } : undefined;
+}
 mock.module("../better-native-pi/core.js", () => ({
 	fitToolLine: (line: string) => line,
 	formatElapsed: (elapsedMs: number) => elapsedMs < 1_000 ? "<1s" : `${Math.round(elapsedMs / 100) / 10}s`,
+	formatPlainGrepMatchSummary: (summary: any) => `${summary.matches}${summary.lowerBound ? "+" : ""} matches${summary.files !== undefined ? ` in ${summary.files} files` : ""}`,
+	grepMatchSummaryFromResult: mockGrepSummary,
 }));
 mock.module("../better-native-pi/render.js", () => ({
 	BOLD: "<bold>",
+	CYAN: "<cyan>",
+	DIM: "<dim>",
 	GREEN: "<green>",
 	MAGENTA: "<magenta>",
 	RED: "<red>",
 	RESET: "</>",
+	nonEmptyLineCount: (text: string) => text.trim().split("\n").filter(Boolean).length,
+	shortPath: (path: string) => path,
 }));
 
 const { default: webSearchExtension } = await import("./index");
