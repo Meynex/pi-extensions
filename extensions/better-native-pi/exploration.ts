@@ -1,7 +1,7 @@
 import { basename, dirname } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
-import { formatPlainGrepMatchSummary, grepMatchSummaryFromResult } from "./core.js";
+import { formatPlainGrepMatchSummary, grepMatchSummaryFromResult, renderCommandOutput } from "./core.js";
 import { CYAN, GREEN, RESET, shortPath } from "./render.js";
 
 export const EXPLORATION_DETAILS_KEY = "__pi_exploration";
@@ -268,15 +268,10 @@ function styledDetail(item: DisplayActivity, theme: any): string {
 	return summary ? `${detail}${dim(theme, " · ")}${summary}` : detail;
 }
 
-function renderExpandedOutput(text: string | undefined, prefix: string, width: number, theme: any): string[] {
-	const normalized = text?.replace(/\t/g, "   ").replace(/\s+$/, "");
+function renderOutputSnippet(text: string | undefined, width: number, expanded: boolean): string[] {
+	const normalized = text?.replace(/\s+$/, "");
 	if (!normalized) return [];
-	const styledPrefix = dim(theme, prefix);
-	const bodyWidth = Math.max(1, width - visibleWidth(styledPrefix));
-	return normalized.split("\n").flatMap((line) => {
-		const wrapped = wrapTextWithAnsi(line, bodyWidth);
-		return wrapped.map((row) => truncateToWidth(`${styledPrefix}${dim(theme, row)}`, width, "…"));
-	});
+	return renderCommandOutput(normalized, width, { maxRows: expanded ? undefined : 3 });
 }
 
 export function renderExploration(
@@ -306,8 +301,8 @@ export function renderExploration(
 			const prefix = rowIndex === 0 ? firstPrefix : continuationPrefix;
 			lines.push(truncateToWidth(`${prefix}${row}`, maxWidth, "…"));
 		}
-		if (options.expanded && item.output) {
-			lines.push(...renderExpandedOutput(item.output, isLast ? "      " : "  │   ", maxWidth, theme));
+		if (item.output) {
+			lines.push(...renderOutputSnippet(item.output, maxWidth, options.expanded ?? false));
 		}
 	});
 	return lines;

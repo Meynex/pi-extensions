@@ -42,19 +42,27 @@ describe("exploration live rendering", () => {
 		expect(rendered).toContain(`${GREEN}7 matches${RESET} in ${CYAN}3 files${RESET}`);
 	});
 
-	test("shows grep output only when expanded", () => {
+	test("shows a collapsed grep snippet and expands full output", () => {
 		const activity = {
 			verb: "Search" as const,
 			detail: "TODO in extensions/better-native-pi",
-			summary: "2 matches in 1 file",
-			output: "core.ts:1: TODO one\ncore.ts:2: TODO two",
+			summary: "4 matches in 1 file",
+			output: [
+				"core.ts:1: TODO one",
+				"core.ts:2: TODO two",
+				"core.ts:3: TODO three",
+				"core.ts:4: TODO four",
+			].join("\n"),
 		};
-		const collapsed = renderExploration([activity], false, theme, 120).join("\n");
-		const expanded = renderExploration([activity], false, theme, 120, { expanded: true }).join("\n");
+		const collapsed = plain(renderExploration([activity], false, theme, 120).join("\n"));
+		const expanded = plain(renderExploration([activity], false, theme, 120, { expanded: true }).join("\n"));
 
-		expect(plain(collapsed)).not.toContain("core.ts:1: TODO one");
-		expect(plain(expanded)).toContain("core.ts:1: TODO one");
-		expect(plain(expanded)).toContain("core.ts:2: TODO two");
+		expect(collapsed).toContain("… +2 earlier lines");
+		expect(collapsed).not.toContain("core.ts:1: TODO one");
+		expect(collapsed).toContain("core.ts:3: TODO three");
+		expect(collapsed).toContain("core.ts:4: TODO four");
+		expect(expanded).toContain("core.ts:1: TODO one");
+		expect(expanded).toContain("core.ts:4: TODO four");
 	});
 
 	test("does not render streamed path fragments before execution starts", () => {
