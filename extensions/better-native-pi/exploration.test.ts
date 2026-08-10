@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
 	enableExplorationToolRendering,
+	renderExploration,
 	renderExplorationCall,
 	resetExplorationStateForTests,
 } from "./exploration.js";
@@ -18,6 +19,17 @@ describe("exploration live rendering", () => {
 	beforeEach(() => {
 		resetExplorationStateForTests();
 		enableExplorationToolRendering();
+	});
+
+	test("shows settled grep match counts", () => {
+		const lines = renderExploration(
+			[{ verb: "Search", detail: "TODO in extensions/better-native-pi", summary: "7 matches in 3 files" }],
+			false,
+			theme,
+			120,
+		);
+
+		expect(lines.join("\n")).toContain("Search TODO in extensions/better-native-pi · 7 matches in 3 files");
 	});
 
 	test("does not render streamed path fragments before execution starts", () => {

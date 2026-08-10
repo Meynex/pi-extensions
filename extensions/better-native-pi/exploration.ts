@@ -1,6 +1,7 @@
 import { basename, dirname } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { formatPlainGrepMatchSummary, grepMatchSummaryFromResult } from "./core.js";
 import { shortPath } from "./render.js";
 
 export const EXPLORATION_DETAILS_KEY = "__pi_exploration";
@@ -11,6 +12,8 @@ const EXPLORATION_TOOLS = new Set(["read", "ls", "grep", "find"]);
 export interface Activity {
 	verb: "Read" | "List" | "Search";
 	detail: string;
+	/** Plain settled-result summary appended after completion. */
+	summary?: string;
 	/** Raw path for structured read coalescing; detail stays as fallback text. */
 	path?: string;
 	/** Human range label, e.g. "lines 10-40", for chunked reads. */
@@ -20,6 +23,7 @@ export interface Activity {
 interface DisplayActivity {
 	verb: Activity["verb"];
 	detail: string;
+	summary?: string;
 }
 
 interface LegacySummary {
@@ -194,7 +198,7 @@ function coalescedActivities(activities: readonly Activity[]): DisplayActivity[]
 	for (let index = 0; index < activities.length;) {
 		const current = activities[index];
 		if (current.verb !== "Read") {
-			grouped.push({ verb: current.verb, detail: displayDetail(current) });
+			grouped.push({ verb: current.verb, detail: displayDetail(current), summary: current.summary });
 			index += 1;
 			continue;
 		}
@@ -231,14 +235,19 @@ function styledReadDetail(detail: string, theme: any): string {
 }
 
 function styledDetail(item: DisplayActivity, theme: any): string {
-	if (item.verb === "Read") return styledReadDetail(item.detail, theme);
-	if (item.verb === "Search") {
+	let detail: string;
+	if (item.verb === "Read") {
+		detail = styledReadDetail(item.detail, theme);
+	} else if (item.verb === "Search") {
 		const separator = " in ";
 		const index = item.detail.lastIndexOf(separator);
-		if (index < 0) return item.detail;
-		return `${item.detail.slice(0, index)}${dim(theme, separator)}${item.detail.slice(index + separator.length)}`;
+		detail = index < 0
+			? item.detail
+			: `${item.detail.slice(0, index)}${dim(theme, separator)}${item.detail.slice(index + separator.length)}`;
+	} else {
+		detail = item.detail;
 	}
-	return item.detail;
+	return item.summary ? `${detail}${dim(theme, " · ")}${item.summary}` : detail;
 }
 
 export function renderExploration(
@@ -369,11 +378,12 @@ function groupForCall(toolCallId: string): ExplorationGroup | undefined {
 	return groupId ? state.groups.get(groupId) : undefined;
 }
 
-function finishCall(toolCallId: string, isError: boolean): ExplorationCall | undefined {
+function finishCall(toolCallId: string, isError: boolean, outcome?: { summary?: string }): ExplorationCall | undefined {
 	const group = groupForCall(toolCallId);
 	const call = group?.calls.find((item) => item.toolCallId === toolCallId);
 	if (!group || !call) return undefined;
 	call.status = isError ? "error" : "done";
+	if (outcome) call.activity.summary = outcome.summary?.trim() || undefined;
 	notifyGroup(group);
 	return call;
 }
@@ -394,6 +404,7 @@ function markerFrom(value: any): ExplorationMarker | undefined {
 	if (typeof marker.toolCallId !== "string" || typeof marker.toolName !== "string") return undefined;
 	if (!Number.isInteger(marker.index) || !marker.activity || typeof marker.activity.detail !== "string") return undefined;
 	if (marker.activity.verb !== "Read" && marker.activity.verb !== "List" && marker.activity.verb !== "Search") return undefined;
+	if (marker.activity.summary !== undefined && typeof marker.activity.summary !== "string") return undefined;
 	return marker as ExplorationMarker;
 }
 
@@ -408,6 +419,12 @@ function markerForCall(group: ExplorationGroup, call: ExplorationCall, isError: 
 		activity: { ...call.activity },
 		isError,
 	};
+}
+
+function explorationResultSummary(toolName: string, result: any): string | undefined {
+	if (toolName !== "grep") return undefined;
+	const summary = grepMatchSummaryFromResult(result);
+	return summary ? formatPlainGrepMatchSummary(summary) : undefined;
 }
 
 function upsertPersistedMarker(marker: ExplorationMarker): ExplorationGroup {
@@ -443,7 +460,11 @@ function upsertPersistedMarker(marker: ExplorationMarker): ExplorationGroup {
 			call.toolName = marker.toolName;
 			changed = true;
 		}
-		if (call.activity.verb !== marker.activity.verb || call.activity.detail !== marker.activity.detail) {
+		if (
+			call.activity.verb !== marker.activity.verb ||
+			call.activity.detail !== marker.activity.detail ||
+			call.activity.summary !== marker.activity.summary
+		) {
 			call.activity = { ...marker.activity };
 			changed = true;
 		}
@@ -631,7 +652,8 @@ export default function (pi: ExtensionAPI) {
 		if (!registry().rendererEnabled || !isExplorationTool(event.toolName)) return;
 		const group = groupForCall(event.toolCallId)
 			?? ensureLiveCall(event.toolCallId, event.toolName, event.input);
-		const call = finishCall(event.toolCallId, Boolean(event.isError));
+		const summary = explorationResultSummary(event.toolName, event);
+		const call = finishCall(event.toolCallId, Boolean(event.isError), { summary });
 		if (!group || !call) return;
 		const details = event.details && typeof event.details === "object" ? event.details : {};
 		return {
