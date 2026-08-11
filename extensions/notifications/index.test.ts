@@ -136,11 +136,27 @@ test("force test command sends a diagnostic bell immediately", async () => {
 	});
 });
 
-test("delayed test command reports focused suppression", async () => {
+test("delayed test command rings when focus reports are unavailable", async () => {
+	await withFocusAwareTerminal(async () => {
+		await captureBellWrites(async (writes) => {
+			const h = makeHarness("/tmp/pi-notifications-test-unknown", { mode: "tui" });
+			await h.emit("session_start");
+			await h.command("notifications", "test 0");
+			await waitForTimers();
+			await h.emit("session_shutdown");
+
+			expect(bellCount(writes)).toBe(1);
+			expect(h.notifications.at(-1)?.message).toContain("focus=unknown");
+		});
+	});
+});
+
+test("delayed test command reports focused suppression after a focus-in report", async () => {
 	await withFocusAwareTerminal(async () => {
 		await captureBellWrites(async (writes) => {
 			const h = makeHarness("/tmp/pi-notifications-test-focused", { mode: "tui" });
 			await h.emit("session_start");
+			h.terminalInput("\x1b[I");
 			await h.command("notifications", "test 0");
 			await waitForTimers();
 			await h.emit("session_shutdown");

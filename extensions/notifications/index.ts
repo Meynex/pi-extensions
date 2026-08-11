@@ -84,6 +84,15 @@ function notify(title: string, body: string, options: { dedupe?: boolean } = {})
 }
 
 type GoalStatus = "active" | "paused" | "blocked" | "complete";
+type FocusState = "unknown" | "focused" | "unfocused";
+
+function shouldEmitForFocusState(focusAware: boolean, focusState: FocusState): boolean {
+	// Fail open when no focus report has reached this extension. In Pi fullscreen,
+	// the viewport consumes focus-in/out reports before extension listeners see
+	// them, so treating the initial state as focused would silently drop every
+	// notification.
+	return !focusAware || focusState !== "focused";
+}
 
 function isGoalStatus(status: unknown): status is GoalStatus {
 	return status === "active" || status === "paused" || status === "blocked" || status === "complete";
@@ -101,8 +110,9 @@ export default function (pi: ExtensionAPI) {
 	let runId = 0;
 	let completionNotifiedRun = -1;
 	let inputNotifiedRun = -1;
-	let terminalFocused = true;
+	let terminalFocus: FocusState = "unknown";
 	let focusAware = false;
+	let focusReportCount = 0;
 	let unsubscribeTerminalInput: (() => void) | undefined;
 	let project = "pi";
 	let goalStatus: GoalStatus | undefined;
@@ -117,14 +127,15 @@ export default function (pi: ExtensionAPI) {
 
 	const formatDiagnostics = () => {
 		const terminal = [process.env.TERM_PROGRAM, process.env.TERM].filter(Boolean).join("/") || "unknown";
-		const normalGate = enabled && shouldEmitForFocus(focusAware, terminalFocused);
-		const focusState = focusAware ? (terminalFocused ? "focused" : "unfocused") : "not tracked";
+		const normalGate = enabled && shouldEmitForFocusState(focusAware, terminalFocus);
+		const focusState = focusAware ? terminalFocus : "not tracked";
 		const goal = goalStatus ? `${goalStatus}${goalActiveThisRun ? " (active this run)" : ""}` : "none";
 		return [
 			`enabled=${enabled ? "yes" : "no"}`,
 			`normal=${normalGate ? "would ring" : "suppressed"}`,
 			`focus=${focusState}`,
 			`focusAware=${focusAware ? "yes" : "no"}`,
+			`focusReports=${focusReportCount}`,
 			`tty=${process.stdout.isTTY ? "yes" : "no"}`,
 			`terminal=${terminal}`,
 			`tmux=${process.env.TMUX ? "yes" : "no"}`,
@@ -135,7 +146,7 @@ export default function (pi: ExtensionAPI) {
 	const notifyIfUnfocused = (title: string, body: string) => {
 		// The bell surfaces as the 🔔 unread-tab marker in Ghostty
 		// (and similar in iTerm/WezTerm/Kitty). Only ring when unfocused.
-		if (!shouldEmitForFocus(focusAware, terminalFocused)) return;
+		if (!shouldEmitForFocusState(focusAware, terminalFocus)) return;
 		notify(title, body);
 	};
 
@@ -185,7 +196,7 @@ export default function (pi: ExtensionAPI) {
 						ctx.ui.notify(`Notification test did not ring: notifications are off. ${formatDiagnostics()}`, "warning");
 						return;
 					}
-					if (!shouldEmitForFocus(focusAware, terminalFocused)) {
+					if (!shouldEmitForFocusState(focusAware, terminalFocus)) {
 						ctx.ui.notify(`Notification test suppressed: terminal is still focused. ${formatDiagnostics()}`, "warning");
 						return;
 					}
@@ -211,15 +222,17 @@ export default function (pi: ExtensionAPI) {
 		project = ctx.cwd.split("/").filter(Boolean).pop() || "pi";
 		goalStatus = undefined;
 		goalActiveThisRun = false;
-		terminalFocused = true;
+		terminalFocus = "unknown";
+		focusReportCount = 0;
 		focusAware = ctx.mode === "tui" && supportsOsc9Terminal();
 		unsubscribeTerminalInput?.();
 		unsubscribeTerminalInput = undefined;
 		if (focusAware) {
 			unsubscribeTerminalInput = ctx.ui.onTerminalInput((data: string) => {
-				const parsed = parseFocusReports(data, terminalFocused);
+				const parsed = parseFocusReports(data, terminalFocus === "focused");
 				if (!parsed.changed) return;
-				terminalFocused = parsed.focused;
+				focusReportCount += 1;
+				terminalFocus = parsed.focused ? "focused" : "unfocused";
 				return parsed.data ? { data: parsed.data } : { consume: true };
 			});
 			process.stdout.write(ENABLE_FOCUS_REPORTING);
@@ -234,7 +247,8 @@ export default function (pi: ExtensionAPI) {
 		unsubscribeTerminalInput = undefined;
 		if (focusAware && process.stdout.isTTY) process.stdout.write(DISABLE_FOCUS_REPORTING);
 		focusAware = false;
-		terminalFocused = true;
+		focusReportCount = 0;
+		terminalFocus = "unknown";
 	});
 	pi.on("agent_start", () => {
 		runId += 1;

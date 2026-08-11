@@ -11,8 +11,10 @@ Sends a **terminal bell** (`\a`, wrapped in tmux passthrough when inside tmux)
 - Plain terminals — may do nothing
 
 Only fires when the terminal is **unfocused** (detected via focus-reporting
-escape sequences on Ghostty/iTerm/Kitty/Warp/WezTerm). Deduplicates identical
-notifications within a 5s window.
+escape sequences on Ghostty/iTerm/Kitty/Warp/WezTerm). If focus reports do not
+reach the extension, it fails open and rings rather than silently dropping every
+notification; `/notifications status` shows `focus=unknown` and `focusReports=0`
+in that case. Deduplicates identical notifications within a 5s window.
 
 When the `goal` extension has an active self-driving goal, routine turn-complete
 bells are suppressed. Notifications still fire for user input requests, explicit
