@@ -32,6 +32,10 @@ uses the normal turn-complete notification.
 ## Commands
 
 - `/notifications on|off|status` — toggle or check status
+- `/notifications test [seconds]` — schedule a gated test bell after a delay
+  (default 3s); switch away from the terminal before it fires
+- `/notifications test force` — send one immediate bell, bypassing the
+  enabled/focus gates, to test terminal bell settings
 
 ## Dependencies
 

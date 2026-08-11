@@ -61,13 +61,15 @@ export function shouldEmitForFocus(focusAware: boolean, terminalFocused: boolean
 	return !focusAware || !terminalFocused;
 }
 
-function notify(title: string, body: string) {
-	const state = globalNotificationState();
-	const now = Date.now();
-	const signature = `${title}\u0000${body}`;
-	if (state.lastSignature === signature && now - (state.lastSentAt ?? 0) < DUPLICATE_WINDOW_MS) return;
-	state.lastSignature = signature;
-	state.lastSentAt = now;
+function notify(title: string, body: string, options: { dedupe?: boolean } = {}) {
+	if (options.dedupe !== false) {
+		const state = globalNotificationState();
+		const now = Date.now();
+		const signature = `${title}\u0000${body}`;
+		if (state.lastSignature === signature && now - (state.lastSentAt ?? 0) < DUPLICATE_WINDOW_MS) return;
+		state.lastSignature = signature;
+		state.lastSentAt = now;
+	}
 
 	// Terminal bell only. Each terminal decides how to surface it:
 	// Ghostty shows the 🔔 unread-tab
@@ -105,6 +107,30 @@ export default function (pi: ExtensionAPI) {
 	let project = "pi";
 	let goalStatus: GoalStatus | undefined;
 	let goalActiveThisRun = false;
+	let pendingTestTimer: ReturnType<typeof setTimeout> | undefined;
+
+	const clearPendingTest = () => {
+		if (!pendingTestTimer) return;
+		clearTimeout(pendingTestTimer);
+		pendingTestTimer = undefined;
+	};
+
+	const formatDiagnostics = () => {
+		const terminal = [process.env.TERM_PROGRAM, process.env.TERM].filter(Boolean).join("/") || "unknown";
+		const normalGate = enabled && shouldEmitForFocus(focusAware, terminalFocused);
+		const focusState = focusAware ? (terminalFocused ? "focused" : "unfocused") : "not tracked";
+		const goal = goalStatus ? `${goalStatus}${goalActiveThisRun ? " (active this run)" : ""}` : "none";
+		return [
+			`enabled=${enabled ? "yes" : "no"}`,
+			`normal=${normalGate ? "would ring" : "suppressed"}`,
+			`focus=${focusState}`,
+			`focusAware=${focusAware ? "yes" : "no"}`,
+			`tty=${process.stdout.isTTY ? "yes" : "no"}`,
+			`terminal=${terminal}`,
+			`tmux=${process.env.TMUX ? "yes" : "no"}`,
+			`goal=${goal}`,
+		].join(" · ");
+	};
 
 	const notifyIfUnfocused = (title: string, body: string) => {
 		// The bell surfaces as the 🔔 unread-tab marker in Ghostty
@@ -138,14 +164,40 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("notifications", {
-		description: "Enable or disable desktop notifications",
+		description: "Configure and test desktop notifications",
 		handler: async (args, ctx) => {
-			const action = args.trim().toLowerCase();
-			if (!action || action === "status") return ctx.ui.notify(`Desktop notifications are ${enabled ? "on (unfocused tabs only)" : "off"}.`, "info");
-			if (action !== "on" && action !== "off") return ctx.ui.notify("Usage: /notifications on|off|status", "warning");
+			const [action = "status", value] = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
+			if (action === "status") return ctx.ui.notify(`Desktop notifications are ${enabled ? "on (unfocused tabs only)" : "off"}. ${formatDiagnostics()}`, "info");
+			if (action === "test") {
+				clearPendingTest();
+				if (value === "force" || value === "now") {
+					notify(`${project}: notification test`, "Forced test bell", { dedupe: false });
+					return ctx.ui.notify(`Forced test bell sent. ${formatDiagnostics()}`, "info");
+				}
+
+				const seconds = value === undefined ? 3 : Number(value);
+				if (!Number.isFinite(seconds) || seconds < 0 || seconds > 60) return ctx.ui.notify("Usage: /notifications test [0-60|force]", "warning");
+				const delayMs = Math.round(seconds * 1000);
+				ctx.ui.notify(`Notification test scheduled in ${seconds}s. Switch away from this terminal. ${formatDiagnostics()}`, "info");
+				pendingTestTimer = setTimeout(() => {
+					pendingTestTimer = undefined;
+					if (!enabled) {
+						ctx.ui.notify(`Notification test did not ring: notifications are off. ${formatDiagnostics()}`, "warning");
+						return;
+					}
+					if (!shouldEmitForFocus(focusAware, terminalFocused)) {
+						ctx.ui.notify(`Notification test suppressed: terminal is still focused. ${formatDiagnostics()}`, "warning");
+						return;
+					}
+					notify(`${project}: notification test`, `Gated test bell after ${seconds}s`, { dedupe: false });
+					ctx.ui.notify(`Notification test bell sent. ${formatDiagnostics()}`, "info");
+				}, delayMs);
+				return;
+			}
+			if (action !== "on" && action !== "off") return ctx.ui.notify("Usage: /notifications on|off|status|test [seconds|force]", "warning");
 			enabled = action === "on";
 			await saveEnabled(enabled);
-			ctx.ui.notify(`Desktop notifications ${enabled ? "enabled" : "disabled"}.`, "info");
+			ctx.ui.notify(`Desktop notifications ${enabled ? "enabled" : "disabled"}. ${formatDiagnostics()}`, "info");
 		},
 	});
 
@@ -177,6 +229,7 @@ export default function (pi: ExtensionAPI) {
 		pi.events.emit("goal:request", undefined);
 	});
 	pi.on("session_shutdown", () => {
+		clearPendingTest();
 		unsubscribeTerminalInput?.();
 		unsubscribeTerminalInput = undefined;
 		if (focusAware && process.stdout.isTTY) process.stdout.write(DISABLE_FOCUS_REPORTING);

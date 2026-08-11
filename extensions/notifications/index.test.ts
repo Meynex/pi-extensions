@@ -26,16 +26,24 @@ function assistant(text: string) {
 	return { role: "assistant", content: [{ type: "text", text }] };
 }
 
-function makeHarness(cwd: string) {
+function makeHarness(cwd: string, options: { mode?: string } = {}) {
 	const handlers: Record<string, Handler[]> = {};
 	const busHandlers: Record<string, BusHandler[]> = {};
+	const commands: Record<string, { handler: (args: string, ctx: any) => any }> = {};
 	const emitted: Array<{ name: string; payload: any }> = [];
+	const notifications: Array<{ message: string; type?: string }> = [];
+	let terminalInputHandler: ((data: string) => any) | undefined;
 	const ctx = {
 		cwd,
-		mode: "json",
+		mode: options.mode ?? "json",
 		ui: {
-			notify() {},
-			onTerminalInput() { return () => {}; },
+			notify(message: string, type?: string) { notifications.push({ message, type }); },
+			onTerminalInput(handler: (data: string) => any) {
+				terminalInputHandler = handler;
+				return () => {
+					if (terminalInputHandler === handler) terminalInputHandler = undefined;
+				};
+			},
 		},
 	};
 
@@ -51,13 +59,20 @@ function makeHarness(cwd: string) {
 			},
 		},
 		on(name: string, handler: Handler) { (handlers[name] ??= []).push(handler); },
-		registerCommand() {},
+		registerCommand(name: string, command: any) { commands[name] = command; },
 	} as any);
 
 	return {
 		emitted,
+		notifications,
 		emitBus(name: string, payload: any) {
 			for (const handler of busHandlers[name] ?? []) handler(payload);
+		},
+		terminalInput(data: string) {
+			return terminalInputHandler?.(data);
+		},
+		async command(name: string, args = "") {
+			await commands[name]?.handler(args, ctx);
 		},
 		async emit(name: string, payload: any = {}) {
 			for (const handler of handlers[name] ?? []) await handler(payload, ctx);
@@ -83,8 +98,73 @@ function bellCount(writes: string[]): number {
 	return writes.filter((write) => write.includes("\x07")).length;
 }
 
+async function waitForTimers() {
+	await new Promise((resolve) => setTimeout(resolve, 10));
+}
+
+async function withFocusAwareTerminal(run: () => Promise<void> | void) {
+	const originalTermProgram = process.env.TERM_PROGRAM;
+	const originalTerm = process.env.TERM;
+	const originalIsTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+	process.env.TERM_PROGRAM = "ghostty";
+	process.env.TERM = "xterm-ghostty";
+	Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+	try {
+		await run();
+	} finally {
+		if (originalTermProgram === undefined) delete process.env.TERM_PROGRAM;
+		else process.env.TERM_PROGRAM = originalTermProgram;
+		if (originalTerm === undefined) delete process.env.TERM;
+		else process.env.TERM = originalTerm;
+		if (originalIsTty) Object.defineProperty(process.stdout, "isTTY", originalIsTty);
+		else delete (process.stdout as any).isTTY;
+	}
+}
+
 test("reads config from the configured Pi agent directory", () => {
 	expect(notificationsConfigPath()).toBe(join(agentDirectory, "notifications.json"));
+});
+
+test("force test command sends a diagnostic bell immediately", async () => {
+	await captureBellWrites(async (writes) => {
+		const h = makeHarness("/tmp/pi-notifications-test-force");
+		await h.emit("session_start");
+		await h.command("notifications", "test force");
+
+		expect(bellCount(writes)).toBe(1);
+		expect(h.notifications.at(-1)?.message).toContain("Forced test bell sent");
+	});
+});
+
+test("delayed test command reports focused suppression", async () => {
+	await withFocusAwareTerminal(async () => {
+		await captureBellWrites(async (writes) => {
+			const h = makeHarness("/tmp/pi-notifications-test-focused", { mode: "tui" });
+			await h.emit("session_start");
+			await h.command("notifications", "test 0");
+			await waitForTimers();
+			await h.emit("session_shutdown");
+
+			expect(bellCount(writes)).toBe(0);
+			expect(h.notifications.at(-1)?.message).toContain("terminal is still focused");
+		});
+	});
+});
+
+test("delayed test command rings after focus leaves", async () => {
+	await withFocusAwareTerminal(async () => {
+		await captureBellWrites(async (writes) => {
+			const h = makeHarness("/tmp/pi-notifications-test-unfocused", { mode: "tui" });
+			await h.emit("session_start");
+			h.terminalInput("\x1b[O");
+			await h.command("notifications", "test 0");
+			await waitForTimers();
+			await h.emit("session_shutdown");
+
+			expect(bellCount(writes)).toBe(1);
+			expect(h.notifications.at(-1)?.message).toContain("Notification test bell sent");
+		});
+	});
 });
 
 test("rings on a normal completed turn", async () => {
