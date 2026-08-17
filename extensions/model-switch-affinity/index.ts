@@ -10,11 +10,16 @@ const AFFINITY_HEADERS = new Set([
 	"x-session-id",
 ]);
 const AFFINITY_PAYLOAD_FIELDS = ["prompt_cache_key", "promptCacheKey"] as const;
+const PASSTHROUGH_PROVIDERS = new Set(["foundry-openai"]);
 
 function modelScope(ctx: any): { provider: string; model: string } | undefined {
 	const provider = ctx.model?.provider;
 	const model = ctx.model?.id;
 	if (typeof provider !== "string" || typeof model !== "string") return;
+	// The Foundry proxy treats non-UUIDv7 session IDs as legacy and routes them
+	// to the default upstream. Leave its affinity values untouched so local
+	// Foundry-specific extensions can rotate fresh UUIDv7 IDs when needed.
+	if (PASSTHROUGH_PROVIDERS.has(provider)) return;
 	return { provider, model };
 }
 

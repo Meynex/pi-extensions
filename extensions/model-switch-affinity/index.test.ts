@@ -47,6 +47,21 @@ test("rewrites existing cache keys without mutating the original payload", () =>
 	expect(scopeAffinityPayload({ model: "model-a" }, "provider-a", "model-a")).toBeUndefined();
 });
 
+test("request hooks preserve Foundry affinity values", () => {
+	const handlers = new Map<string, (...args: any[]) => any>();
+	modelSwitchAffinity({ on: (name: string, handler: any) => handlers.set(name, handler) } as any);
+
+	const headers = { session_id: "01a01010-f0dd-7dab-a2c9-a2aa5a2545a7" };
+	const ctx = { model: { provider: "foundry-openai", id: "gpt-5.6-sol" } };
+	const payload = { prompt_cache_key: headers.session_id };
+
+	handlers.get("before_provider_headers")?.({ headers }, ctx);
+	const output = handlers.get("before_provider_request")?.({ payload }, ctx);
+
+	expect(headers.session_id).toBe("01a01010-f0dd-7dab-a2c9-a2aa5a2545a7");
+	expect(output).toBeUndefined();
+});
+
 test("request hooks change affinity when the selected model changes", () => {
 	const handlers = new Map<string, (...args: any[]) => any>();
 	modelSwitchAffinity({ on: (name: string, handler: any) => handlers.set(name, handler) } as any);
