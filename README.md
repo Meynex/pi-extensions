@@ -72,6 +72,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | Extension | What it does |
 |---|---|
 | [`background-jobs`](extensions/background-jobs/) | Run long-lived shell commands in the background with live status, without blocking the agent transcript |
+| [`herdr-process`](extensions/herdr-process/) | Run visible long-lived commands in sibling Herdr panes and control them from Pi |
 | [`herdr-tab-title`](extensions/herdr-tab-title/) | Keep Herdr tab labels synchronized with Pi session names |
 | [`model-switch-affinity`](extensions/model-switch-affinity/) | Scope provider affinity and prompt-cache identifiers to the selected model so gateway routes do not stick after a model switch |
 | [`notifications`](extensions/notifications/) | Desktop notifications for agent activity, so you can context-switch away and get pinged |
@@ -152,6 +153,7 @@ edit-summary -> overlay-stack
 footer -> subagents
 goal -> better-native-pi
 goal -> overlay-stack
+herdr-process -> better-native-pi
 overlay-stack -> accent-color
 plan-progress -> overlay-stack
 subagents -> better-native-pi
