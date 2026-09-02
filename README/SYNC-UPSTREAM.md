@@ -57,6 +57,13 @@ The workflow never merges automatically.
 
 ## Required repository permissions
 
+The workflow needs a repository secret named `PI_EXTENSIONS_SYNC_TOKEN`. The
+built-in `GITHUB_TOKEN` can push the branch but GitHub may deny
+`createPullRequest` for this fork workflow. Create a fine-grained token for
+`Meynex/pi-extensions` with only `Contents: Read and write` and `Pull requests:
+Read and write`, then add it under **Settings → Secrets and variables → Actions**.
+Never put the token in workflow files or PR text.
+
 Workflow permissions:
 
 ```yaml
