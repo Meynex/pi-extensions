@@ -2,11 +2,51 @@
   "name": "pi-extensions",
   "version": "0.1.0",
   "description": "A collection of TUI extensions for the pi coding agent: nicer tool-block rendering, context telemetry, goal/plan tracking, background jobs, and more.",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "private": true,
   "license": "MIT",
   "pi": {
-    "extensions": ["./extensions/*"]
+    "extensions": [
+      "./extensions/accent-color",
+      "./extensions/auto-compact-continue",
+      "./extensions/auto-session-title",
+      "./extensions/background-jobs",
+      "./extensions/better-native-pi",
+      "./extensions/cached-line-resets",
+      "./extensions/code-blocks",
+      "./extensions/context-inspector",
+      "./extensions/doctor",
+      "./extensions/edit-summary",
+      "./extensions/footer",
+      "./extensions/goal",
+      "./extensions/herdr-process",
+      "./extensions/herdr-tab-title",
+      "./extensions/history-search",
+      "./extensions/hyperlinks",
+      "./extensions/image-store",
+      "./extensions/koliko",
+      "./extensions/model-switch-affinity",
+      "./extensions/notifications",
+      "./extensions/openai-codex-fast",
+      "./extensions/overlay-stack",
+      "./extensions/petit-chat-input-bar",
+      "./extensions/plan-progress",
+      "./extensions/prevent-sleep",
+      "./extensions/questions",
+      "./extensions/reload-all",
+      "./extensions/rename",
+      "./extensions/rewind",
+      "./extensions/session-search",
+      "./extensions/side-chat",
+      "./extensions/subagents",
+      "./extensions/telegram",
+      "./extensions/transcript",
+      "./extensions/turn-separator",
+      "./extensions/turn-stats",
+      "./extensions/working-timer"
+    ]
   },
   "dependencies": {
     "marked": "18.0.5"
