@@ -84,9 +84,9 @@ function scanDiff(baseRef) {
     ["provider_registration", /pi\.registerProvider\s*\(/],
     ["tool_call_interceptor", /pi\.on\(['\"]tool_call['\"]/],
     ["provider_payload_hook", /pi\.on\(['\"]before_provider_request['\"]/],
-    ["shell_execution", /\b(exec|execFile|spawn|spawnSync|execSync|pi\.exec)\s*\(/],
+    ["shell_execution", /\b(exec|execFile|execFileSync|spawn|spawnSync|execSync|pi\.exec)\s*\(/],
     ["network_access", /\b(fetch|XMLHttpRequest|WebSocket)\s*\(/],
-    ["filesystem_access", /\b(readFile|writeFile|appendFile|rm|unlink|rename|mkdir)\s*\(/],
+    ["filesystem_access", /\b(readFile|readFileSync|writeFile|writeFileSync|appendFile|appendFileSync|rm|rmSync|unlink|unlinkSync|rename|renameSync|mkdir|mkdirSync)\s*\(/],
     ["prompt_or_system_change", /(systemPrompt|promptGuidelines|promptSnippet|before_agent_start)/],
   ];
   for (const [name, pattern] of patterns) {
