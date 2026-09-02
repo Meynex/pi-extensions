@@ -28,7 +28,8 @@ jobs:
           fi
           npm install --global @github/copilot@1.0.82
           copilot --version
-          copilot --help | grep -q -- '--model' || {
+          copilot --help > /tmp/copilot-help.txt 2>&1
+          grep -q -- '--model' /tmp/copilot-help.txt || {
             echo 'BLOCK: installed Copilot CLI cannot pin --model'
             exit 1
           }
