@@ -1,0 +1,144 @@
+name: Upstream sync review
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+  copilot-requests: write
+
+concurrency:
+  group: upstream-sync-review
+  cancel-in-progress: false
+
+jobs:
+  sync-review-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone fork and fetch upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git config --global user.name "upstream-sync-bot"
+          git config --global user.email "upstream-sync-bot@users.noreply.github.com"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" repo
+          cd repo
+          git remote add upstream https://github.com/angristan/pi-extensions.git
+          git fetch origin main
+          git fetch upstream
+          upstream_default=$(gh repo view angristan/pi-extensions --json defaultBranchRef --jq '.defaultBranchRef.name')
+          git fetch upstream "$upstream_default"
+          echo "UPSTREAM_DEFAULT=$upstream_default" >> "$GITHUB_ENV"
+          echo "UPSTREAM_OLD=$(git rev-parse origin/main)" >> "$GITHUB_ENV"
+          echo "UPSTREAM_NEW=$(git rev-parse upstream/$upstream_default)" >> "$GITHUB_ENV"
+
+      - name: Create sync branch and apply local policy
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          branch="bot/upstream-sync-${UPSTREAM_DEFAULT}"
+          git checkout -B "$branch" origin/main
+          git merge --no-edit "upstream/${UPSTREAM_DEFAULT}"
+          node scripts/sync-policy.mjs apply
+          node scripts/sync-policy.mjs check
+          if ! git diff --quiet; then
+            git add package.json
+            git commit -m "chore: preserve local extension policy"
+          fi
+          echo "SYNC_BRANCH=$branch" >> "$GITHUB_ENV"
+
+      - name: Static safety checks
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          git diff --check origin/main...HEAD
+          node scripts/sync-policy.mjs check
+          diff_file=$(mktemp)
+          git diff --no-ext-diff origin/main...HEAD > "$diff_file"
+          if grep -Eiq '(api[_-]?key|token|secret|password|private[_-]?key)[[:space:]]*[:=][[:space:]]*[A-Za-z0-9_./+=-]{16,}' "$diff_file"; then
+            echo 'BLOCK: possible secret in diff'
+            exit 1
+          fi
+          if node -e 'const p=require("./package.json"); process.exit(p.pi.extensions.includes("./extensions/web-search") || p.pi.extensions.includes("./extensions/*") ? 1 : 0)'; then
+            echo 'policy check ok'
+          else
+            echo 'BLOCK: web-search or wildcard extension loading enabled'
+            exit 1
+          fi
+
+      - name: Generate PR body
+        working-directory: repo
+        env:
+          SYNC_BASE_REF: origin/main
+          PR_BODY_FILE: upstream-sync-pr-body.md
+        run: |
+          set -euo pipefail
+          node scripts/sync-policy.mjs report > upstream-sync-report.log
+
+      - name: Copilot security reviews
+        id: copilot_review
+        working-directory: repo
+        env:
+          SYNC_BASE_REF: origin/main
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          bash scripts/copilot-review.sh
+
+      - name: Append review summary to PR body
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          {
+            echo
+            echo '---'
+            echo
+            if [ -f review-results/summary.md ]; then
+              cat review-results/summary.md
+            else
+              echo '# Copilot Review Summary'
+              echo
+              echo 'Overall: BLOCK'
+              echo
+              echo 'Reason: review did not produce a summary.'
+            fi
+            echo
+            if [ '${{ steps.copilot_review.outcome }}' != 'success' ]; then
+              echo '**Security gate: BLOCK** — Copilot review failed or reported BLOCK. No automatic merge is allowed.'
+            else
+              echo '**Security gate: REVIEWED** — maintainer must still inspect and merge manually.'
+            fi
+          } >> upstream-sync-pr-body.md
+
+      - name: Push branch
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          git push --force-with-lease origin "$SYNC_BRANCH"
+
+      - name: Create or update pull request
+        working-directory: repo
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          existing=$(gh pr list --head "$SYNC_BRANCH" --base main --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title "chore: sync upstream pi-extensions" --body-file upstream-sync-pr-body.md
+            gh pr comment "$existing" --body-file review-results/summary.md || true
+          else
+            gh pr create --base main --head "$SYNC_BRANCH" --title "chore: sync upstream pi-extensions" --body-file upstream-sync-pr-body.md
+          fi
+
+      - name: Fail workflow if security gate blocked
+        if: steps.copilot_review.outcome != 'success'
+        run: |
+          echo 'Copilot security gate is BLOCK. PR was created/updated for manual review, but this check fails intentionally.'
+          exit 1
