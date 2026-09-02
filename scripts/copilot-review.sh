@@ -43,6 +43,18 @@ EOF
   exit 22
 fi
 
+if ! grep -Eq '^COPILOT_MODEL_OK$' /tmp/copilot-model-check.txt; then
+  cat > "$status_file" <<'EOF'
+# Copilot Review Summary
+
+Overall: BLOCK
+
+Reason: model pin check did not return the expected COPILOT_MODEL_OK marker.
+EOF
+  cat /tmp/copilot-model-check.txt >> "$status_file"
+  exit 22
+fi
+
 diff_file="$out_dir/upstream.diff"
 git diff --no-ext-diff --find-renames "$base_ref...HEAD" > "$diff_file"
 
