@@ -383,6 +383,7 @@ export default function (pi: ExtensionAPI) {
 	let host: CodeBlockHost | undefined;
 
 	const clear = (ctx: any) => {
+		host?.dispose();
 		ctx.ui.setWidget(HOST_KEY, undefined);
 		host = undefined;
 	};
