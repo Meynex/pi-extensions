@@ -155,7 +155,8 @@ jobs:
       - name: Create or update pull request
         working-directory: repo
         env:
-          GH_TOKEN: ${{ secrets.PI_EXTENSIONS_SYNC_TOKEN }}
+          # Repository policy now permits GITHUB_TOKEN to create PRs.
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           existing=$(gh pr list --head "$SYNC_BRANCH" --base main --json number --jq '.[0].number // empty')
