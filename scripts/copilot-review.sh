@@ -20,7 +20,19 @@ EOF
   exit 20
 fi
 
-if ! copilot --help 2>&1 | grep -q -- '--model'; then
+if ! copilot --help > /tmp/copilot-help.txt 2>&1; then
+  cat > "$status_file" <<'EOF'
+# Copilot Review Summary
+
+Overall: BLOCK
+
+Reason: official GitHub Copilot CLI help failed.
+EOF
+  cat /tmp/copilot-help.txt >> "$status_file"
+  exit 21
+fi
+
+if ! grep -q -- '--model' /tmp/copilot-help.txt; then
   cat > "$status_file" <<'EOF'
 # Copilot Review Summary
 
