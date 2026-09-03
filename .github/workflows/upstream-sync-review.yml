@@ -85,7 +85,7 @@ jobs:
           node scripts/sync-policy.mjs check
           diff_file=$(mktemp)
           git diff --no-ext-diff origin/main...HEAD > "$diff_file"
-          if grep -Eiq '(api[_-]?key|token|secret|password|private[_-]?key)[[:space:]]*[:=][[:space:]]*[A-Za-z0-9_./+=-]{16,}' "$diff_file"; then
+          if grep -Piq '(api[_-]?key|token|secret|password|private[_-]?key)[[:space:]]*[:=](?![[:space:]]*(process\.env|\$\{\{[[:space:]]*(secrets\.|github\.token)))[[:space:]]*[\x27\"]?[A-Za-z0-9_./+=-]{16,}' "$diff_file"; then
             echo 'BLOCK: possible secret in diff'
             exit 1
           fi
