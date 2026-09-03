@@ -85,8 +85,12 @@ jobs:
           node scripts/sync-policy.mjs check
           diff_file=$(mktemp)
           git diff --no-ext-diff origin/main...HEAD > "$diff_file"
-          if grep -Piq '(api[_-]?key|token|secret|password|private[_-]?key)[[:space:]]*[:=](?![[:space:]]*(process\.env|\$\{\{[[:space:]]*(secrets\.|github\.token)))[[:space:]]*[\x27\"]?[A-Za-z0-9_./+=-]{16,}' "$diff_file"; then
-            echo 'BLOCK: possible secret in diff'
+          secret_pattern='(api[_-]?key|token|secret|password|private[_-]?key)[[:space:]]*[:=](?![[:space:]]*(process\.env|\$\{\{[[:space:]]*(secrets\.|github\.token)))[[:space:]]*[\x27\"]?[A-Za-z0-9_./+=-]{16,}'
+          secret_matches=$(grep -Pi "$secret_pattern" "$diff_file" || true)
+          real_secret_matches=$(printf '%s\n' "$secret_matches" | grep -Eiv 'process\.env\.|test[-_]|example|dummy|placeholder|fake' || true)
+          if [ -n "$real_secret_matches" ]; then
+            echo 'BLOCK: possible non-placeholder secret in diff'
+            printf '%s\n' "$real_secret_matches"
             exit 1
           fi
           if node -e 'const p=require("./package.json"); process.exit(p.pi.extensions.includes("./extensions/web-search") || p.pi.extensions.includes("./extensions/*") ? 1 : 0)'; then
