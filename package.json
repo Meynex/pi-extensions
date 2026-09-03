@@ -26,7 +26,6 @@
       "./extensions/history-search",
       "./extensions/hyperlinks",
       "./extensions/image-store",
-      "./extensions/koliko",
       "./extensions/model-switch-affinity",
       "./extensions/notifications",
       "./extensions/openai-codex-fast",
