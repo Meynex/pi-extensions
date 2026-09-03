@@ -49,6 +49,9 @@
     ]
   },
   "dependencies": {
+    "@shikijs/core": "4.4.3",
+    "@shikijs/engine-javascript": "4.4.3",
+    "@shikijs/langs": "4.4.3",
     "marked": "18.0.5"
   },
   "devDependencies": {

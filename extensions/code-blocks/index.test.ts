@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { visibleWidth } from "@earendil-works/pi-tui";
-import { renderCodeBlock, renderCodeBox } from "./index";
+import { Markdown, visibleWidth } from "@earendil-works/pi-tui";
+import codeBlocks, { renderCodeBlock, renderCodeBox } from "./index";
 
 const theme = {
 	codeBlock: (text: string) => text,
@@ -101,4 +101,28 @@ test("leaves incomplete extended-color sequences intact", () => {
 
 	expect(row).toContain("\x1b[38;2;255mvalue");
 	expect(row).not.toContain("NaN");
+});
+
+test("session shutdown disposes the mounted code-block host immediately", () => {
+	const handlers = new Map<string, (...args: any[]) => any>();
+	let widgetFactory: any;
+	codeBlocks({ on: (name: string, handler: any) => handlers.set(name, handler) } as any);
+	const ctx = {
+		mode: "tui",
+		ui: {
+			theme,
+			setWidget(_key: string, value: any) { widgetFactory = value; },
+		},
+	};
+	const tui = { invalidate() {}, requestRender() {} };
+	const patch = Symbol.for("pi.code-blocks.patch");
+	const originalRenderToken = Markdown.prototype.renderToken;
+
+	handlers.get("session_start")?.({}, ctx);
+	widgetFactory(tui);
+	expect((Markdown.prototype as any)[patch]).toBeDefined();
+
+	handlers.get("session_shutdown")?.({}, ctx);
+	expect(Markdown.prototype.renderToken).toBe(originalRenderToken);
+	expect((Markdown.prototype as any)[patch]).toBeUndefined();
 });
