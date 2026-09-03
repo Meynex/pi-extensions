@@ -16,7 +16,7 @@ upstream `web-search` extension so that the consuming Pi setup can use
 `npm:pi-web-access` as its only `web_search` provider.
 
 ```bash
-pi install git:github.com/Meynex/pi-extensions@<reviewed-tag-or-commit>
+pi install "git:github.com/Meynex/pi-extensions@<reviewed-tag-or-commit>"
 ```
 
 Pi clones it to `~/.pi/agent/git/github.com/Meynex/pi-extensions/` and loads only
