@@ -79,7 +79,7 @@ function scanDiff(baseRef) {
   const diff = diffText(baseRef);
   const findings = [];
   const patterns = [
-    ["possible_secret", /(?:api[_-]?key|token|secret|password|private[_-]?key)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=-]{16,}/i],
+    ["possible_secret", /(?:api[_-]?key|token|secret|password|private[_-]?key)\s*[:=]\s*(?!process\.env\b|\$\{\{\s*secrets\.|\$\{\{\s*github\.token\b)(?:['\"])?[A-Za-z0-9_./+=-]{16,}/i],
     ["tool_registration", /pi\.registerTool\s*\(/],
     ["provider_registration", /pi\.registerProvider\s*\(/],
     ["tool_call_interceptor", /pi\.on\(['\"]tool_call['\"]/],
