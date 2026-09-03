@@ -12,13 +12,22 @@ as shown below.
 
 ## Install
 
+This fork intentionally uses an explicit extension manifest. It excludes the
+upstream `web-search` extension so that the consuming Pi setup can use
+`npm:pi-web-access` as its only `web_search` provider.
+
 ```bash
-pi install git:github.com/angristan/pi-extensions
+pi install "git:github.com/Meynex/pi-extensions@<reviewed-tag-or-commit>"
 ```
 
-Pi clones it to `~/.pi/agent/git/github.com/angristan/pi-extensions/` and
-auto-loads every extension under `extensions/*/index.ts`. Reload with `/reload`
-in a running session, or restart pi. Update later with `pi update --extensions`.
+Pi clones it to `~/.pi/agent/git/github.com/Meynex/pi-extensions/` and loads only
+the extensions listed in `package.json`. The upstream `web-search` directory
+may still exist for review purposes, but it is not loaded by this fork. Reload
+with `/reload` in a running session, or restart pi. Update later with
+`pi update --extensions` only after reviewing the resulting version.
+
+See [`README/SYNC-UPSTREAM.md`](README/SYNC-UPSTREAM.md) for the automated
+upstream-sync, security review, patch policy, and rollback procedure.
 
 ### Requirements
 
@@ -80,7 +89,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`openai-codex-fast`](extensions/openai-codex-fast/) | Toggle OpenAI Codex Fast mode and show a purple `fast` footer indicator when active |
 | [`prevent-sleep`](extensions/prevent-sleep/) | Keep macOS awake while Pi is actively processing an agent run |
 | [`telegram`](extensions/telegram/) | Send direct messages and answer delayed structured questions through Telegram |
-| [`web-search`](extensions/web-search/) | Quality-routed web search and page opening through Exa, Firecrawl, and optional Mistral |
+| `web-search` | **Not loaded in this fork.** Kept only for upstream diff review; use `npm:pi-web-access` for `web_search`. |
 
 ### Diagnostics & performance
 
