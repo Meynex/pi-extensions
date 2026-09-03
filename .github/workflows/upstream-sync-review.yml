@@ -166,10 +166,10 @@ jobs:
           else
             owner="${REPO%%/*}"
             body=$(cat upstream-sync-pr-body.md)
-            gh api --method POST "repos/$REPO/pulls" \\
-              -f title="chore: sync upstream pi-extensions" \\
-              -f head="$owner:$SYNC_BRANCH" \\
-              -f base=main \\
+            gh api --method POST "repos/$REPO/pulls" \
+              -f title="chore: sync upstream pi-extensions" \
+              -f head="$owner:$SYNC_BRANCH" \
+              -f base=main \
               -f body="$body"
           fi
 
