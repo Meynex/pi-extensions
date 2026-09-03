@@ -11,8 +11,9 @@ if (!allowedModes.has(mode)) {
 
 const extensionNames = readdirSync("extensions", { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
+  .filter((entry) => entry.name !== "web-search")
+  .filter((entry) => readdirSync(`extensions/${entry.name}`).includes("index.ts") || readdirSync(`extensions/${entry.name}`).includes("index.js"))
   .map((entry) => entry.name)
-  .filter((name) => name !== "web-search")
   .sort((left, right) => left.localeCompare(right));
 const expectedExtensions = extensionNames.map((name) => `./extensions/${name}`);
 
