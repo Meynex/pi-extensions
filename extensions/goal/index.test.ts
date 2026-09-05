@@ -27,6 +27,8 @@ function makeHarness(options: { judgeRetryPolicy?: { enabled: boolean; maxRetrie
 	const notifications: Array<{ message: string; type?: string }> = [];
 	const confirmCalls: Array<{ title: string; message: string }> = [];
 	const confirmResponses: boolean[] = [];
+	const selectCalls: Array<{ title: string; options: string[] }> = [];
+	const selectResponses: Array<string | undefined> = [];
 	let editorValue: string | undefined;
 	let branchReadCount = 0;
 
@@ -49,6 +51,10 @@ function makeHarness(options: { judgeRetryPolicy?: { enabled: boolean; maxRetrie
 		ui: {
 			notify(message: string, type?: string) { notifications.push({ message, type }); },
 			setStatus() {},
+			select(title: string, options: string[]) {
+				selectCalls.push({ title, options });
+				return Promise.resolve(selectResponses.shift());
+			},
 			confirm(title: string, message: string) {
 				confirmCalls.push({ title, message });
 				return Promise.resolve(confirmResponses.length ? confirmResponses.shift()! : true);
@@ -88,6 +94,8 @@ function makeHarness(options: { judgeRetryPolicy?: { enabled: boolean; maxRetrie
 		notifications,
 		confirmCalls,
 		confirmResponses,
+		selectCalls,
+		selectResponses,
 		ctx,
 		getBranchReadCount: () => branchReadCount,
 		setEditorValue(value: string | undefined) { editorValue = value; },
@@ -317,7 +325,37 @@ test("re-anchors persisted goal context after restore and compaction", async () 
 	expect(sentMessages(h, "goal-context").at(-1)!.message.content).toContain("finish the migration");
 });
 
-test("does not re-anchor a completed goal after compaction or restore", async () => {
+test("retires legacy cleared goal instructions on restore", async () => {
+	const h = makeHarness();
+	h.entries.push(
+		{
+			type: "custom",
+			customType: "goal-state",
+			data: {
+				state: {
+					objective: "monitor the old rollout",
+					validation: [],
+					status: "active",
+					createdAt: 1,
+					updatedAt: 1,
+					activeSince: 1,
+					accumulatedActiveMs: 0,
+					continuations: 1,
+				},
+			},
+		},
+		{ type: "custom", customType: "goal-state", data: { cleared: true } },
+	);
+
+	await emit(h, "session_start");
+
+	const context = sentMessages(h, "goal-context").at(-1)!.message;
+	expect(context.details.status).toBe("cleared");
+	expect(context.content).toContain("previous active-goal instructions are retired");
+	expect(context.content).toContain("monitor the old rollout");
+});
+
+test("retires completed goal instructions across compaction and restore", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("finish the migration", h.ctx);
 	const contextsBeforeCompletion = sentMessages(h, "goal-context").length;
@@ -327,8 +365,12 @@ test("does not re-anchor a completed goal after compaction or restore", async ()
 	await emit(h, "session_start");
 
 	expect(latestGoalState(h).status).toBe("complete");
-	expect(sentMessages(h, "goal-context")).toHaveLength(contextsBeforeCompletion);
-	expect(sentMessages(h, "goal-context").some(({ message }) => message.details?.status === "complete")).toBe(false);
+	const contexts = sentMessages(h, "goal-context");
+	expect(contexts).toHaveLength(contextsBeforeCompletion + 3);
+	for (const { message } of contexts.slice(contextsBeforeCompletion)) {
+		expect(message.details?.status).toBe("complete");
+		expect(message.content).toContain("previous active-goal instructions are retired");
+	}
 });
 
 test("continuation prompt is injected transiently and stale markers are pruned", async () => {
@@ -400,7 +442,8 @@ test("goal tools stay active after their first session activation", async () => 
 	for (const name of ["goal_complete", "goal_block"]) {
 		expect(h.activeTools.has(name)).toBe(true);
 	}
-	expect(sentMessages(h, "goal-context")).toHaveLength(contextsBeforeClear);
+	expect(sentMessages(h, "goal-context")).toHaveLength(contextsBeforeClear + 1);
+	expect(sentMessages(h, "goal-context").at(-1)!.message).toMatchObject({ details: { status: "cleared" } });
 });
 
 test("editing a completed goal reactivates it and starts the loop", async () => {
@@ -439,8 +482,40 @@ test("terminal provider errors block the active goal instead of continuing", asy
 	expect(state.status).toBe("blocked");
 	expect(state.blockedAudit.fingerprint).toBe("provider-usage-limit");
 	expect(state.blockedAudit.evidence).toBe("429 too many requests");
-	expect(sentMessages(h, "goal-context")).toHaveLength(contextsBeforeError);
+	expect(sentMessages(h, "goal-context")).toHaveLength(contextsBeforeError + 1);
+	const blockedContext = sentMessages(h, "goal-context").at(-1)!.message;
+	expect(blockedContext.details.status).toBe("blocked");
+	expect(blockedContext.content).toContain("goal_resume");
+	expect(blockedContext.content).toContain("goal_clear");
 	expect(sentMessages(h, "goal-continuation")).toHaveLength(continuationsBeforeError);
+});
+
+test("offers resume, keep, or clear when reopening an inactive goal", async () => {
+	const reopenWith = async (choice: string, reason = "resume") => {
+		const h = makeHarness();
+		await h.commands.goal.handler("monitor the rollout", h.ctx);
+		await h.commands.goal.handler("block", h.ctx);
+		h.selectResponses.push(choice);
+		await emit(h, "session_start", { reason });
+		return h;
+	};
+
+	const resumed = await reopenWith("Resume goal");
+	expect(resumed.selectCalls[0]!.options).toEqual(["Resume goal", "Keep blocked", "Clear goal"]);
+	expect(latestGoalState(resumed).status).toBe("active");
+
+	const kept = await reopenWith("Keep blocked", "startup");
+	expect(latestGoalState(kept).status).toBe("blocked");
+
+	const cleared = await reopenWith("Clear goal");
+	expect(cleared.entries.at(-1)!.data).toEqual({ cleared: true });
+
+	const reloaded = makeHarness();
+	await reloaded.commands.goal.handler("monitor the rollout", reloaded.ctx);
+	await reloaded.commands.goal.handler("block", reloaded.ctx);
+	await emit(reloaded, "session_start", { reason: "reload" });
+	expect(reloaded.selectCalls).toHaveLength(0);
+	expect(latestGoalState(reloaded).status).toBe("blocked");
 });
 
 test("goal_complete silently retries a transient judge failure", async () => {
@@ -729,14 +804,16 @@ test("a settled run without goal_block breaks the blocker audit", async () => {
 	expect(latestGoalState(h).blockedAudit).toBeUndefined();
 });
 
-test("goal_set and goal_resume are always available", async () => {
+test("goal_set, goal_resume, and goal_clear are always available", async () => {
 	const h = makeHarness();
 	await emit(h, "session_start");
 	// Lifecycle entry tools are available before a goal exists; terminal tools
 	// remain gated until a goal becomes active.
 	expect(h.activeTools.has("goal_set")).toBe(true);
 	expect(h.activeTools.has("goal_resume")).toBe(true);
+	expect(h.activeTools.has("goal_clear")).toBe(true);
 	expect(h.tools.goal_resume.description).toContain("Do not use goal_set with replace: true");
+	expect(h.tools.goal_clear.description).toContain("obsolete, superseded, cancelled, or unrelated");
 	expect(h.activeTools.has("goal_complete")).toBe(false);
 	expect(h.activeTools.has("goal_block")).toBe(false);
 	const notificationsBeforeSet = h.notifications.length;
@@ -801,6 +878,33 @@ test("goal_resume reports when no goal exists", async () => {
 	const lines = renderBlock(block);
 	expect(lines[0]).toContain("Goal resume failed");
 	expect(lines[1]).toContain("No session goal to resume");
+});
+
+test("goal_clear retires stale goals without deleting their history", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("monitor the old rollout", h.ctx);
+	await h.commands.goal.handler("block", h.ctx);
+	const entriesBeforeClear = h.entries.length;
+
+	const result = await h.tools.goal_clear.execute("clear", { reason: "the user changed topics" }, undefined, undefined, h.ctx);
+
+	expect(result.details).toMatchObject({ ok: true, cleared: true, previousStatus: "blocked" });
+	expect(h.entries).toHaveLength(entriesBeforeClear + 1);
+	expect(h.entries.at(-1)!.data).toEqual({ cleared: true });
+	const context = sentMessages(h, "goal-context").at(-1)!.message;
+	expect(context.details.status).toBe("cleared");
+	expect(context.content).toContain("previous active-goal instructions are retired");
+	expect(context.content).toContain("monitor the old rollout");
+	const block = h.tools.goal_clear.renderResult(result, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
+	expect(renderBlock(block)[0]).toContain("Cleared goal");
+	expect(renderBlock(block)[1]).toContain("monitor the old rollout");
+});
+
+test("goal_clear reports when no goal exists", async () => {
+	const h = makeHarness();
+	const result = await h.tools.goal_clear.execute("clear", {}, undefined, undefined, h.ctx);
+	expect(result.details).toEqual({ ok: false, reason: "no-goal" });
+	expect(renderBlock(h.tools.goal_clear.renderResult(result, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined }))[0]).toContain("Goal clear failed");
 });
 
 test("goal_set refuses to silently overwrite an in-progress goal", async () => {
