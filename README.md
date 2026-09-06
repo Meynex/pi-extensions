@@ -75,7 +75,7 @@ upstream-sync, security review, patch policy, and rollback procedure.
 | [`plan-progress`](extensions/plan-progress/) | Track flat or nested plans with derived group progress in a collapsible overlay |
 | [`questions`](extensions/questions/) | Ask structured questions, preserve answers, and report pending input as blocked to Herdr |
 | [`side-chat`](extensions/side-chat/) | An ephemeral, read-only side question about the current conversation, without changing the main transcript |
-| [`subagents`](extensions/subagents/) | Spawn and coordinate generic child agents with isolated persistent conversations |
+| [`subagents`](extensions/subagents/) | Spawn isolated child agents with structured results and automatic visible Herdr panes |
 
 ### Tools & integrations
 
