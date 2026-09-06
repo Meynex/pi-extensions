@@ -314,11 +314,16 @@ export class HerdrAgentClient implements AgentClient {
 			await withTimeout(this.ready!, BRIDGE_START_TIMEOUT_MS, "Timed out waiting for the visible child bridge");
 			await this.send({ type: "get_state" });
 		} catch (error) {
-			this.errorText = error instanceof Error ? error.message : String(error);
-			await this.closeTransport();
-			await this.surfaces.closePane(this.options.herdr);
+			const startupError = error instanceof Error ? error : new Error(String(error));
+			this.errorText = startupError.message;
+			const cleanupErrors: Error[] = [];
+			try { await this.closeTransport(); }
+			catch (cleanupError) { cleanupErrors.push(cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError))); }
+			try { await this.surfaces.closePane(this.options.herdr); }
+			catch (cleanupError) { cleanupErrors.push(cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError))); }
 			this.started = false;
-			throw error;
+			if (cleanupErrors.length > 0) throw new AggregateError([startupError, ...cleanupErrors], startupError.message);
+			throw startupError;
 		}
 	}
 

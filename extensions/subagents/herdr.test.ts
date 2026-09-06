@@ -195,4 +195,25 @@ describe("Herdr subagent surfaces", () => {
 
 		await expect((client as any).closeTransport()).rejects.toThrow("close failed");
 	});
+
+	test("preserves startup failures while still attempting cleanup", async () => {
+		let closedPane = false;
+		const client = new HerdrAgentClient({
+			command: "pi",
+			args: [],
+			cwd: "/repo",
+			env: { "BAD-NAME": "boom" } as Record<string, string>,
+			herdr: { agentId: "reviewer-1", name: "reviewer" },
+		}, {
+			async ensurePane() { throw new Error("ensurePane should not run"); },
+			async runCommand() {},
+			async interrupt() {},
+			async waitUntilIdle() { return true; },
+			async closePane() { closedPane = true; },
+		} as any);
+		(client as any).closeTransport = async () => { throw new Error("cleanup failed"); };
+
+		await expect(client.start()).rejects.toThrow("Invalid shell environment variable name: BAD-NAME");
+		expect(closedPane).toBe(true);
+	});
 });
