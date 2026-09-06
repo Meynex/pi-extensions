@@ -241,7 +241,18 @@ interface PendingRequest {
 
 function closeServer(server: Pick<Server, "close">): Promise<void> {
 	return new Promise<void>((resolve, reject) => {
-		server.close((error) => error ? reject(error) : resolve());
+		server.close((error) => {
+			if (!error) {
+				resolve();
+				return;
+			}
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === "ERR_SERVER_NOT_RUNNING") {
+				resolve();
+				return;
+			}
+			reject(error);
+		});
 	});
 }
 
@@ -485,7 +496,7 @@ export class HerdrAgentClient implements AgentClient {
 		this.pending.clear();
 		const server = this.server;
 		this.server = undefined;
-		if (server?.listening) await closeServer(server);
+		if (server) await closeServer(server);
 		const bridgeDirectory = this.bridgeDirectory;
 		this.bridgeDirectory = undefined;
 		if (bridgeDirectory) await rm(bridgeDirectory, { recursive: true, force: true });

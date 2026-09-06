@@ -196,6 +196,23 @@ describe("Herdr subagent surfaces", () => {
 		await expect((client as any).closeTransport()).rejects.toThrow("close failed");
 	});
 
+	test("ignores already-closed bridge servers during transport cleanup", async () => {
+		const client = new HerdrAgentClient({
+			command: "pi",
+			args: [],
+			cwd: "/repo",
+			herdr: { agentId: "reviewer-1", name: "reviewer" },
+		}, {} as any);
+		(client as any).server = {
+			listening: false,
+			close(callback: (error?: NodeJS.ErrnoException | undefined) => void) {
+				callback(Object.assign(new Error("not running"), { code: "ERR_SERVER_NOT_RUNNING" }));
+			},
+		};
+
+		await expect((client as any).closeTransport()).resolves.toBeUndefined();
+	});
+
 	test("preserves startup failures while still attempting cleanup", async () => {
 		let closedPane = false;
 		const client = new HerdrAgentClient({
