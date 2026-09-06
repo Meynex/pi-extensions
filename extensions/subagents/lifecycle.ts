@@ -177,9 +177,14 @@ export interface AgentLifecycleOptions {
 	updateOverlay(): void;
 	refreshTranscript(): void;
 	trimClosed(): void;
+	cleanupClientOptions?(clientOptions: AgentClientOptions): Promise<void>;
 }
 
 export function createAgentLifecycle(options: AgentLifecycleOptions) {
+	const disposeAgentSurface = async (agent: ManagedAgent): Promise<void> => {
+		await options.cleanupClientOptions?.(agent.clientOptions);
+	};
+
 	const hibernateAgent = async (agent: ManagedAgent): Promise<void> => {
 		if (agent.hibernatePromise) return agent.hibernatePromise;
 		const client = agent.client;
@@ -342,8 +347,14 @@ export function createAgentLifecycle(options: AgentLifecycleOptions) {
 				const client = agent.client;
 				await client?.stop();
 				if (agent.client === client) agent.client = undefined;
-				await agent.fork.cleanup();
-				agent.cleanupComplete = true;
+				const cleanupErrors: unknown[] = [];
+				try { await disposeAgentSurface(agent); }
+				catch (error) { cleanupErrors.push(error); }
+				try { await agent.fork.cleanup(); }
+				catch (error) { cleanupErrors.push(error); }
+				if (cleanupErrors.length === 0) agent.cleanupComplete = true;
+				else if (cleanupErrors.length === 1) throw cleanupErrors[0];
+				else throw new AggregateError(cleanupErrors, "Subagent cleanup failed");
 			} finally {
 				options.updateOverlay();
 				if (agent.cleanupComplete) options.trimClosed();
@@ -415,5 +426,5 @@ export function createAgentLifecycle(options: AgentLifecycleOptions) {
 		await hibernateAgent(agent);
 	};
 
-	return { attachClient, closeAgent, ensureClient, finishRun, hibernateAgent, interruptAgent, suspendAgent };
+	return { attachClient, closeAgent, disposeAgentSurface, ensureClient, finishRun, hibernateAgent, interruptAgent, suspendAgent };
 }

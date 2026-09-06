@@ -75,7 +75,7 @@ upstream-sync, security review, patch policy, and rollback procedure.
 | [`plan-progress`](extensions/plan-progress/) | Track flat or nested plans with derived group progress in a collapsible overlay |
 | [`questions`](extensions/questions/) | Ask structured questions, preserve answers, and report pending input as blocked to Herdr |
 | [`side-chat`](extensions/side-chat/) | An ephemeral, read-only side question about the current conversation, without changing the main transcript |
-| [`subagents`](extensions/subagents/) | Spawn and coordinate generic child agents with isolated persistent conversations |
+| [`subagents`](extensions/subagents/) | Spawn isolated child agents with structured results and automatic visible Herdr panes |
 
 ### Tools & integrations
 
@@ -89,7 +89,7 @@ upstream-sync, security review, patch policy, and rollback procedure.
 | [`openai-codex-fast`](extensions/openai-codex-fast/) | Toggle OpenAI Codex Fast mode and show a purple `fast` footer indicator when active |
 | [`prevent-sleep`](extensions/prevent-sleep/) | Keep macOS awake while Pi is actively processing an agent run |
 | [`telegram`](extensions/telegram/) | Send direct messages and answer delayed structured questions through Telegram |
-| `web-search` | **Not loaded in this fork.** Kept only for upstream diff review; use `npm:pi-web-access` for `web_search`. |
+| [`web-search`](extensions/web-search/) | **Not loaded in this fork.** Kept only for upstream diff review; use `npm:pi-web-access` for `web_search`. |
 
 ### Diagnostics & performance
 
