@@ -375,6 +375,7 @@ export class HerdrAgentClient implements AgentClient {
 			return;
 		}
 		if (this.pendingAuthentication.size >= MAX_PENDING_UNAUTHENTICATED_CONNECTIONS) {
+			socket.once("error", () => {});
 			socket.destroy(new Error("Too many pending child bridge connections"));
 			return;
 		}

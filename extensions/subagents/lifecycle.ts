@@ -347,9 +347,14 @@ export function createAgentLifecycle(options: AgentLifecycleOptions) {
 				const client = agent.client;
 				await client?.stop();
 				if (agent.client === client) agent.client = undefined;
-				await disposeAgentSurface(agent);
-				await agent.fork.cleanup();
-				agent.cleanupComplete = true;
+				const cleanupErrors: unknown[] = [];
+				try { await disposeAgentSurface(agent); }
+				catch (error) { cleanupErrors.push(error); }
+				try { await agent.fork.cleanup(); }
+				catch (error) { cleanupErrors.push(error); }
+				if (cleanupErrors.length === 0) agent.cleanupComplete = true;
+				else if (cleanupErrors.length === 1) throw cleanupErrors[0];
+				else throw new AggregateError(cleanupErrors, "Subagent cleanup failed");
 			} finally {
 				options.updateOverlay();
 				if (agent.cleanupComplete) options.trimClosed();

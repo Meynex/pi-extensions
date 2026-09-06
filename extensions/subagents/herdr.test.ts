@@ -26,6 +26,7 @@ class FakeSocket extends EventEmitter {
 	destroy(error?: Error) {
 		this.destroyed = true;
 		this.destroyError = error;
+		if (error) this.emit("error", error);
 		this.emit("close");
 		return this;
 	}
