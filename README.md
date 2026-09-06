@@ -89,7 +89,7 @@ upstream-sync, security review, patch policy, and rollback procedure.
 | [`openai-codex-fast`](extensions/openai-codex-fast/) | Toggle OpenAI Codex Fast mode and show a purple `fast` footer indicator when active |
 | [`prevent-sleep`](extensions/prevent-sleep/) | Keep macOS awake while Pi is actively processing an agent run |
 | [`telegram`](extensions/telegram/) | Send direct messages and answer delayed structured questions through Telegram |
-| `web-search` | **Not loaded in this fork.** Kept only for upstream diff review; use `npm:pi-web-access` for `web_search`. |
+| [`web-search`](extensions/web-search/) | **Not loaded in this fork.** Kept only for upstream diff review; use `npm:pi-web-access` for `web_search`. |
 
 ### Diagnostics & performance
 
