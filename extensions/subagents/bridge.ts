@@ -124,13 +124,15 @@ export function registerChildBridge(pi: ExtensionAPI, dependencies: ChildBridgeD
 		socket.on("data", handleData);
 		socket.on("error", () => { /* The close handler owns orphan cleanup. */ });
 		socket.on("close", () => {
+			const context = activeContext;
 			socket = undefined;
-			if (shuttingDown || !activeContext) return;
+			activeContext = undefined;
+			if (shuttingDown || !context) return;
 			// A parent crash must not leave an untracked model process running in a
 			// visible pane. Abort current work before requesting graceful teardown.
 			shuttingDown = true;
-			activeContext.abort();
-			bestEffortShutdown(activeContext);
+			context.abort();
+			bestEffortShutdown(context);
 		});
 	});
 	pi.on("agent_start", () => emit({ type: "agent_start" }));
@@ -153,9 +155,7 @@ export function registerChildBridge(pi: ExtensionAPI, dependencies: ChildBridgeD
 	pi.on("session_shutdown", () => {
 		shuttingDown = true;
 		emit({ type: "session_shutdown" });
-		activeContext = undefined;
 		socket?.end();
-		socket = undefined;
 	});
 	return true;
 }

@@ -170,6 +170,8 @@ describe("visible child bridge", () => {
 		expect(await readRecord()).toMatchObject({ id: "one", success: true });
 		await Bun.sleep(0);
 		expect(shutdowns).toBe(1);
+		handlers.get("agent_settled")?.({}, {});
+		expect(await readRecord()).toEqual({ type: "agent_settled" });
 
 		socket.destroy();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
