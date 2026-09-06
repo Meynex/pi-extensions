@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { EventEmitter } from "node:events";
 import { HerdrAgentClient, HerdrSurfaceManager, type ExecResult } from "./herdr";
 
 const cleanup: Array<() => Promise<void>> = [];
@@ -13,6 +14,21 @@ afterEach(async () => {
 
 function success(result: unknown): ExecResult {
 	return { code: 0, stdout: JSON.stringify({ result }), stderr: "" };
+}
+
+class FakeSocket extends EventEmitter {
+	destroyed = false;
+	timeoutMs?: number;
+	destroyError?: Error;
+	setNoDelay() { return this; }
+	setTimeout(value: number) { this.timeoutMs = value; return this; }
+	write() { return true; }
+	destroy(error?: Error) {
+		this.destroyed = true;
+		this.destroyError = error;
+		this.emit("close");
+		return this;
+	}
 }
 
 describe("Herdr subagent surfaces", () => {
@@ -117,5 +133,51 @@ describe("Herdr subagent surfaces", () => {
 		expect(events).toContainEqual(expect.objectContaining({ type: "message_end", message: expect.objectContaining({ role: "assistant" }) }));
 		await client.stop();
 		expect(interrupted).toBe(false);
+	});
+
+	test("rejects invalid launcher environment names", async () => {
+		const client = new HerdrAgentClient({
+			command: "pi",
+			args: ["--session", "/tmp/context.jsonl"],
+			cwd: "/repo",
+			env: { GOOD_NAME: "ok", "BAD-NAME": "boom" } as Record<string, string>,
+			herdr: { agentId: "reviewer-1", name: "reviewer" },
+		}, {
+			async ensurePane() { throw new Error("ensurePane should not run"); },
+			async runCommand() {},
+			async interrupt() {},
+			async waitUntilIdle() { return true; },
+			async closePane() {},
+		} as any);
+
+		await expect(client.start()).rejects.toThrow("Invalid shell environment variable name: BAD-NAME");
+	});
+
+	test("times out and limits unauthenticated bridge connections", async () => {
+		const client = new HerdrAgentClient({
+			command: "pi",
+			args: [],
+			cwd: "/repo",
+			herdr: { agentId: "reviewer-1", name: "reviewer" },
+		}, {} as any);
+		(client as any).resolveReady = () => undefined;
+
+		const sockets = Array.from({ length: 5 }, () => new FakeSocket());
+		for (const socket of sockets) (client as any).accept(socket as any, "secret");
+
+		expect(sockets[0]!.timeoutMs).toBe(5_000);
+		expect(sockets[3]!.timeoutMs).toBe(5_000);
+		expect(sockets[4]!.destroyed).toBe(true);
+		expect(sockets[4]!.destroyError?.message).toContain("Too many pending child bridge connections");
+
+		sockets[0]!.emit("timeout");
+		expect(sockets[0]!.destroyed).toBe(true);
+		expect(sockets[0]!.destroyError?.message).toContain("Timed out waiting for child bridge authentication");
+
+		const authenticated = new FakeSocket();
+		(client as any).accept(authenticated as any, "secret");
+		authenticated.emit("data", `${JSON.stringify({ type: "hello", token: "secret", agentId: "reviewer-1" })}\n`);
+		expect(authenticated.timeoutMs).toBe(0);
+		expect((client as any).socket).toBe(authenticated);
 	});
 });

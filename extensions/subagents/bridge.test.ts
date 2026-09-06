@@ -137,6 +137,45 @@ describe("visible child bridge", () => {
 		await rm(directory, { recursive: true, force: true });
 	});
 
+	test("swallows child shutdown errors during best-effort teardown", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-subagent-bridge-shutdown-test-"));
+		const socketPath = join(directory, "bridge.sock");
+		const { server, connection } = await listeningServer(socketPath);
+		const handlers = new Map<string, (...args: any[]) => void>();
+		let shutdowns = 0;
+		const pi = {
+			on(name: string, handler: (...args: any[]) => void) { handlers.set(name, handler); },
+			sendUserMessage() {},
+		};
+		registerChildBridge(pi as any, {
+			env: {
+				[BRIDGE_SOCKET_ENV]: socketPath,
+				[BRIDGE_TOKEN_ENV]: "secret",
+				[BRIDGE_AGENT_ID_ENV]: "reviewer-1",
+			},
+		});
+		handlers.get("session_start")?.({}, {
+			isIdle: () => true,
+			abort() {},
+			shutdown() {
+				shutdowns += 1;
+				throw new Error("boom");
+			},
+		});
+		const socket = await connection;
+		const readRecord = nextRecord(socket);
+		expect(await readRecord()).toMatchObject({ type: "hello", agentId: "reviewer-1" });
+
+		socket.write(`${JSON.stringify({ type: "shutdown", id: "one" })}\n`);
+		expect(await readRecord()).toMatchObject({ id: "one", success: true });
+		await Bun.sleep(0);
+		expect(shutdowns).toBe(1);
+
+		socket.destroy();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await rm(directory, { recursive: true, force: true });
+	});
+
 	test("stays disabled without an explicit parent socket", () => {
 		expect(registerChildBridge({ on() {} } as any, { env: {} })).toBe(false);
 	});

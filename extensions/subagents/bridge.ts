@@ -24,6 +24,11 @@ function writeRecord(socket: Pick<Socket, "write" | "destroyed"> | undefined, va
 	socket.write(`${JSON.stringify(value)}\n`);
 }
 
+function bestEffortShutdown(context: any): void {
+	try { context?.shutdown(); }
+	catch { /* Parent-triggered shutdown is best-effort. */ }
+}
+
 /**
  * Connect a visible child TUI to its parent. Herdr remains presentation-only:
  * lifecycle events and control messages use this authenticated local channel.
@@ -78,7 +83,7 @@ export function registerChildBridge(pi: ExtensionAPI, dependencies: ChildBridgeD
 				case "shutdown":
 					shuttingDown = true;
 					respond(command, true);
-					queueMicrotask(() => activeContext?.shutdown());
+					queueMicrotask(() => bestEffortShutdown(activeContext));
 					return;
 				default:
 					throw new Error(`Unknown child bridge command: ${(command as any).type}`);
@@ -125,7 +130,7 @@ export function registerChildBridge(pi: ExtensionAPI, dependencies: ChildBridgeD
 			// visible pane. Abort current work before requesting graceful teardown.
 			shuttingDown = true;
 			activeContext.abort();
-			activeContext.shutdown();
+			bestEffortShutdown(activeContext);
 		});
 	});
 	pi.on("agent_start", () => emit({ type: "agent_start" }));

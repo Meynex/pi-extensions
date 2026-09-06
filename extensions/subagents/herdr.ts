@@ -11,8 +11,11 @@ const HERDR_TIMEOUT_MS = 10_000;
 const BRIDGE_START_TIMEOUT_MS = 30_000;
 const BRIDGE_COMMAND_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 3_000;
+const BRIDGE_AUTH_TIMEOUT_MS = 5_000;
+const MAX_PENDING_UNAUTHENTICATED_CONNECTIONS = 4;
 const MAX_RECORD_BYTES = 2 * 1024 * 1024;
 const TAB_LABEL = "Subagents";
+const SHELL_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
@@ -64,6 +67,11 @@ function shellQuote(value: string): string {
 	return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
+function shellExport(key: string, value: string): string {
+	if (!SHELL_ENV_NAME.test(key)) throw new Error(`Invalid shell environment variable name: ${key}`);
+	return `export ${key}=${shellQuote(value)}`;
+}
+
 function launcherScript(options: HerdrAgentClientOptions, socketPath: string, token: string): string {
 	const env = {
 		...options.env,
@@ -73,7 +81,7 @@ function launcherScript(options: HerdrAgentClientOptions, socketPath: string, to
 	};
 	return [
 		"#!/bin/sh",
-		...Object.entries(env).map(([key, value]) => `export ${key}=${shellQuote(value)}`),
+		...Object.entries(env).map(([key, value]) => shellExport(key, value)),
 		`exec ${[shellQuote(options.command), ...options.args.map(shellQuote)].join(" ")}`,
 		"",
 	].join("\n");
@@ -235,6 +243,7 @@ export class HerdrAgentClient implements AgentClient {
 	private server?: Server;
 	private socket?: Socket;
 	private readonly connections = new Set<Socket>();
+	private readonly pendingAuthentication = new Set<Socket>();
 	private readonly eventListeners = new Set<(event: RpcAgentEvent) => void>();
 	private readonly exitListeners = new Set<(error: Error) => void>();
 	private readonly pending = new Map<string, PendingRequest>();
@@ -343,7 +352,12 @@ export class HerdrAgentClient implements AgentClient {
 			socket.destroy();
 			return;
 		}
+		if (this.pendingAuthentication.size >= MAX_PENDING_UNAUTHENTICATED_CONNECTIONS) {
+			socket.destroy(new Error("Too many pending child bridge connections"));
+			return;
+		}
 		this.connections.add(socket);
+		this.pendingAuthentication.add(socket);
 		let authenticated = false;
 		let buffer = "";
 		const decoder = new StringDecoder("utf8");
@@ -372,6 +386,8 @@ export class HerdrAgentClient implements AgentClient {
 						return;
 					}
 					authenticated = true;
+					this.pendingAuthentication.delete(socket);
+					socket.setTimeout(0);
 					this.socket = socket;
 					this.resolveReady?.();
 					continue;
@@ -380,12 +396,17 @@ export class HerdrAgentClient implements AgentClient {
 			}
 		};
 		socket.setNoDelay(true);
+		socket.setTimeout(BRIDGE_AUTH_TIMEOUT_MS);
+		socket.once("timeout", () => {
+			if (!authenticated) socket.destroy(new Error("Timed out waiting for child bridge authentication"));
+		});
 		socket.on("data", onData);
 		socket.once("error", (error) => {
 			if (authenticated) this.fail(new Error(`Child bridge failed: ${error.message}`));
 		});
 		socket.once("close", () => {
 			this.connections.delete(socket);
+			this.pendingAuthentication.delete(socket);
 			if (!authenticated || this.socket !== socket) return;
 			this.socket = undefined;
 			this.resolveSocketClosed?.();
@@ -444,6 +465,7 @@ export class HerdrAgentClient implements AgentClient {
 		this.stopping = true;
 		for (const connection of this.connections) connection.destroy();
 		this.connections.clear();
+		this.pendingAuthentication.clear();
 		this.socket = undefined;
 		for (const pending of this.pending.values()) {
 			clearTimeout(pending.timer);
