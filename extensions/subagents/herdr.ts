@@ -239,6 +239,12 @@ interface PendingRequest {
 	timer: ReturnType<typeof setTimeout>;
 }
 
+function closeServer(server: Pick<Server, "close">): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		server.close((error) => error ? reject(error) : resolve());
+	});
+}
+
 export class HerdrAgentClient implements AgentClient {
 	private server?: Server;
 	private socket?: Socket;
@@ -474,7 +480,7 @@ export class HerdrAgentClient implements AgentClient {
 		this.pending.clear();
 		const server = this.server;
 		this.server = undefined;
-		if (server?.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
+		if (server?.listening) await closeServer(server);
 		const bridgeDirectory = this.bridgeDirectory;
 		this.bridgeDirectory = undefined;
 		if (bridgeDirectory) await rm(bridgeDirectory, { recursive: true, force: true });

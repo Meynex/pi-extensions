@@ -180,4 +180,19 @@ describe("Herdr subagent surfaces", () => {
 		expect(authenticated.timeoutMs).toBe(0);
 		expect((client as any).socket).toBe(authenticated);
 	});
+
+	test("surfaces server close failures during transport cleanup", async () => {
+		const client = new HerdrAgentClient({
+			command: "pi",
+			args: [],
+			cwd: "/repo",
+			herdr: { agentId: "reviewer-1", name: "reviewer" },
+		}, {} as any);
+		(client as any).server = {
+			listening: true,
+			close(callback: (error?: Error | undefined) => void) { callback(new Error("close failed")); },
+		};
+
+		await expect((client as any).closeTransport()).rejects.toThrow("close failed");
+	});
 });
