@@ -75,6 +75,11 @@ jobs:
             git add package.json
             git commit -m "chore: preserve local extension policy"
           fi
+          if git diff --quiet origin/main...HEAD; then
+            echo "HAS_SYNC_CHANGES=false" >> "$GITHUB_ENV"
+          else
+            echo "HAS_SYNC_CHANGES=true" >> "$GITHUB_ENV"
+          fi
           echo "SYNC_BRANCH=$branch" >> "$GITHUB_ENV"
 
       - name: Static safety checks
@@ -101,6 +106,7 @@ jobs:
           fi
 
       - name: Generate PR body
+        if: env.HAS_SYNC_CHANGES == 'true'
         working-directory: repo
         env:
           SYNC_BASE_REF: origin/main
@@ -110,6 +116,7 @@ jobs:
           node scripts/sync-policy.mjs report > upstream-sync-report.log
 
       - name: Copilot security reviews
+        if: env.HAS_SYNC_CHANGES == 'true'
         id: copilot_review
         working-directory: repo
         env:
@@ -122,6 +129,7 @@ jobs:
           bash scripts/copilot-review.sh
 
       - name: Append review summary to PR body
+        if: env.HAS_SYNC_CHANGES == 'true'
         working-directory: repo
         run: |
           set -euo pipefail
@@ -147,12 +155,14 @@ jobs:
           } >> upstream-sync-pr-body.md
 
       - name: Push branch
+        if: env.HAS_SYNC_CHANGES == 'true'
         working-directory: repo
         run: |
           set -euo pipefail
           git push --force-with-lease origin "$SYNC_BRANCH"
 
       - name: Create or update pull request
+        if: env.HAS_SYNC_CHANGES == 'true'
         working-directory: repo
         env:
           GH_TOKEN: ${{ secrets.PI_EXTENSIONS_SYNC_TOKEN }}
@@ -174,7 +184,7 @@ jobs:
           fi
 
       - name: Fail workflow if security gate blocked
-        if: steps.copilot_review.outcome != 'success'
+        if: env.HAS_SYNC_CHANGES == 'true' && steps.copilot_review.outcome != 'success'
         run: |
           echo 'Copilot security gate is BLOCK. PR was created/updated for manual review, but this check fails intentionally.'
           exit 1
