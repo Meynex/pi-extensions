@@ -150,6 +150,7 @@ better-native-pi -> background-jobs
 better-native-pi -> code-blocks
 better-native-pi -> hyperlinks
 better-native-pi -> image-store
+context-management -> better-native-pi
 doctor -> accent-color
 edit-summary -> overlay-stack
 footer -> subagents
