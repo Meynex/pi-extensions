@@ -45,7 +45,7 @@ The workflow:
 1. clones this fork
 2. fetches the default branch from `https://github.com/angristan/pi-extensions`
 3. creates or updates `bot/upstream-sync-<upstream-default-branch>`
-4. merges upstream into the sync branch
+4. merges upstream into the sync branch and automatically keeps the fork version of selected Herdr/visible-subagent files if that merge hits their known conflict set
 5. reapplies the local package policy excluding `web-search`
 6. runs static checks and a conservative diff secret scan
 7. generates a PR body with commits, diffstat, inferred bugfixes/improvements, risks, and tests
@@ -54,6 +54,19 @@ The workflow:
 10. fails the workflow if Copilot CLI/auth/model is unavailable or any review blocks
 
 The workflow never merges automatically.
+
+## Known conflict policy
+
+`scripts/sync-policy.mjs resolve-conflicts` only auto-resolves the fork-maintained visible-subagent files below by restoring this fork's side of the merge:
+
+- `extensions/subagents/bridge.ts`
+- `extensions/subagents/bridge.test.ts`
+- `extensions/subagents/herdr.ts`
+- `extensions/subagents/herdr.test.ts`
+- `extensions/subagents/lifecycle.ts`
+- `extensions/subagents/lifecycle.test.ts`
+
+Any other merge conflict still fails the workflow so a maintainer can review the divergence explicitly.
 
 ## Required repository permissions
 

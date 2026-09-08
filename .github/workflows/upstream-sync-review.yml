@@ -68,7 +68,10 @@ jobs:
           set -euo pipefail
           branch="bot/upstream-sync-${UPSTREAM_DEFAULT}"
           git checkout -B "$branch" origin/main
-          git merge --no-edit "upstream/${UPSTREAM_DEFAULT}"
+          if ! git merge --no-edit "upstream/${UPSTREAM_DEFAULT}"; then
+            node scripts/sync-policy.mjs resolve-conflicts
+            git commit --no-edit
+          fi
           node scripts/sync-policy.mjs apply
           node scripts/sync-policy.mjs check
           if ! git diff --quiet; then
