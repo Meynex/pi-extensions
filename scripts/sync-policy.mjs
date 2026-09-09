@@ -3,11 +3,20 @@ import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const mode = process.argv[2] ?? "check";
-const allowedModes = new Set(["apply", "check", "report"]);
+const allowedModes = new Set(["apply", "check", "report", "resolve-conflicts"]);
 if (!allowedModes.has(mode)) {
-  console.error(`Usage: node scripts/sync-policy.mjs apply|check|report`);
+  console.error(`Usage: node scripts/sync-policy.mjs apply|check|report|resolve-conflicts`);
   process.exit(2);
 }
+
+const localConflictPaths = new Set([
+  "extensions/subagents/bridge.test.ts",
+  "extensions/subagents/bridge.ts",
+  "extensions/subagents/herdr.test.ts",
+  "extensions/subagents/herdr.ts",
+  "extensions/subagents/lifecycle.test.ts",
+  "extensions/subagents/lifecycle.ts",
+]);
 
 const extensionNames = readdirSync("extensions", { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
@@ -59,6 +68,15 @@ function diffStat(baseRef) {
   }).trim();
 }
 
+function unmergedPaths() {
+  return execFileSync("git", ["diff", "--name-only", "--diff-filter=U"], {
+    encoding: "utf8",
+  })
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 function validatePolicy() {
   const pkg = readPackage();
   const actual = pkg.pi?.extensions;
@@ -74,6 +92,24 @@ function validatePolicy() {
     if (extra.length) errors.push(`unexpected explicit extensions: ${extra.join(", ")}`);
   }
   return errors;
+}
+
+function resolveConflicts() {
+  const paths = unmergedPaths();
+  if (paths.length === 0) {
+    console.error("sync-policy: no merge conflicts to resolve");
+    process.exit(1);
+  }
+  const unsupported = paths.filter((path) => !localConflictPaths.has(path));
+  if (unsupported.length > 0) {
+    console.error(`sync-policy: unsupported merge conflicts: ${unsupported.join(", ")}`);
+    process.exit(1);
+  }
+  for (const path of paths) {
+    execFileSync("git", ["checkout", "--ours", "--", path], { stdio: "inherit" });
+    execFileSync("git", ["add", "--", path], { stdio: "inherit" });
+  }
+  console.log(`sync-policy: kept local versions for ${paths.join(", ")}`);
 }
 
 function scanDiff(baseRef) {
@@ -113,6 +149,10 @@ function parseChangeHints(log) {
 
 if (mode === "apply") {
   applyPolicy();
+}
+
+if (mode === "resolve-conflicts") {
+  resolveConflicts();
 }
 
 const policyErrors = validatePolicy();
