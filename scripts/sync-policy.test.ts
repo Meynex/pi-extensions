@@ -82,3 +82,12 @@ test("resolve-conflicts fails for conflicts outside the allowlist", () => {
 	expect(result.stderr).toContain("unsupported merge conflicts");
 	expect(execFileSync("git", ["diff", "--name-only", "--diff-filter=U"], { cwd: root, encoding: "utf8" }).trim()).toBe("extensions/subagents/index.ts");
 });
+
+test("resolve-conflicts fails when no unmerged paths exist", () => {
+	const root = createRepo();
+
+	const result = spawnSync("node", [scriptPath, "resolve-conflicts"], { cwd: root, encoding: "utf8" });
+
+	expect(result.status).toBe(1);
+	expect(result.stderr).toContain("no merge conflicts to resolve");
+});

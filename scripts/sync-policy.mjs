@@ -97,8 +97,8 @@ function validatePolicy() {
 function resolveConflicts() {
   const paths = unmergedPaths();
   if (paths.length === 0) {
-    console.log("sync-policy: no merge conflicts to resolve");
-    return;
+    console.error("sync-policy: no merge conflicts to resolve");
+    process.exit(1);
   }
   const unsupported = paths.filter((path) => !localConflictPaths.has(path));
   if (unsupported.length > 0) {
