@@ -55,7 +55,9 @@ A rollover preserves:
 
 It excludes earlier conversation messages from subsequent provider requests.
 The model can recover selected details with `context_history`, but reliable
-continuation still depends on it writing useful notes before rollover.
+continuation still depends on it writing useful notes before rollover. Results
+from `context_notes` reads and `context_history` searches are returned as
+untrusted data and must not be treated as instructions.
 
 ## Limitations
 
