@@ -129,7 +129,7 @@ test("merges persisted subagent tokens and cost into session totals", () => {
 	expect(resolved).toEqual(["test-provider/child-model"]);
 });
 
-test("renders extension badges beside the model", () => {
+test("renders model and extension badges responsively", () => {
 	const handlers = new Map<string, (event: any, ctx: any) => void>();
 	const eventHandlers = new Map<string, (event: unknown) => void>();
 	let footerFactory: any;
@@ -158,6 +158,61 @@ test("renders extension badges beside the model", () => {
 	};
 
 	handlers.get("session_start")?.({}, ctx);
+	const extensionStatuses = new Map<string, string>();
+	const component = footerFactory(
+		{ requestRender: () => { renders += 1; } },
+		{ fg: (_token: string, text: string) => text },
+		{
+			onBranchChange: () => () => {},
+			getGitBranch: () => undefined,
+			getExtensionStatuses: () => extensionStatuses,
+		},
+	);
+	const plain = (width = 160) => component.render(width)[0].replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+
+	eventHandlers.get(FOOTER_MODEL_BADGE_EVENT)?.({ source: "routing", text: "priority\nbadge" });
+	expect(plain()).toContain("Test Model high priority badge");
+	expect(renders).toBeGreaterThan(0);
+
+	eventHandlers.get(FOOTER_MODEL_BADGE_EVENT)?.({ source: "routing" });
+	expect(plain()).not.toContain("priority badge");
+
+	extensionStatuses.set("plan", "plan 2/3 with a deliberately long description");
+	extensionStatuses.set("context-management", "ctx:auto");
+	expect(plain(32)).toContain("ctx:auto");
+
+	handlers.get("session_shutdown")?.({}, ctx);
+});
+
+test("refreshes stale context usage immediately after a reset compaction", () => {
+	const handlers = new Map<string, (event: any, ctx: any) => void>();
+	let footerFactory: any;
+	let renders = 0;
+	let usage: any = { tokens: 90_000, contextWindow: 100_000, percent: 90 };
+	footer({
+		on: (name: string, handler: (event: any, ctx: any) => void) => { handlers.set(name, handler); },
+		events: { on: () => {} },
+		getThinkingLevel: () => "high",
+		exec: async () => ({ code: 1, stdout: "", stderr: "" }),
+	} as any);
+	const ctx = {
+		mode: "tui",
+		cwd: "/tmp/project",
+		model: { provider: "test", id: "model", name: "Test Model", reasoning: true, contextWindow: 100_000 },
+		getContextUsage: () => usage,
+		modelRegistry: { find: () => undefined },
+		sessionManager: {
+			getSessionName: () => "Current session",
+			getSessionId: () => "session-id",
+			getEntries: () => [],
+		},
+		ui: {
+			setTitle: () => {},
+			setFooter: (factory: any) => { footerFactory = factory; },
+		},
+	};
+
+	handlers.get("session_start")?.({}, ctx);
 	const component = footerFactory(
 		{ requestRender: () => { renders += 1; } },
 		{ fg: (_token: string, text: string) => text },
@@ -168,13 +223,12 @@ test("renders extension badges beside the model", () => {
 		},
 	);
 	const plain = () => component.render(160)[0].replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+	expect(plain()).toContain("ctx 89%/100K");
 
-	eventHandlers.get(FOOTER_MODEL_BADGE_EVENT)?.({ source: "routing", text: "priority\nbadge" });
-	expect(plain()).toContain("Test Model high priority badge");
-	expect(renders).toBeGreaterThan(0);
-
-	eventHandlers.get(FOOTER_MODEL_BADGE_EVENT)?.({ source: "routing" });
-	expect(plain()).not.toContain("priority badge");
+	usage = { tokens: null, contextWindow: 100_000, percent: null };
+	handlers.get("session_compact")?.({ compactionEntry: { details: { contextManagement: true } } }, ctx);
+	expect(renders).toBe(1);
+	expect(plain()).toContain("ctx 0%/100K");
 
 	handlers.get("session_shutdown")?.({}, ctx);
 });

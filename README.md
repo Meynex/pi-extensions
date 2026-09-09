@@ -70,12 +70,13 @@ upstream-sync, security review, patch policy, and rollback procedure.
 | Extension | What it does |
 |---|---|
 | [`context-inspector`](extensions/context-inspector/) | Inspect where your context window is being spent |
+| [`context-management`](extensions/context-management/) | Opt into per-session durable notes, history retrieval, and no-summary context rollover |
 | [`edit-summary`](extensions/edit-summary/) | Show a passive overlay with net file changes for the current or last agent turn |
 | [`goal`](extensions/goal/) | Track an explicit objective for the session |
 | [`plan-progress`](extensions/plan-progress/) | Track flat or nested plans with derived group progress in a collapsible overlay |
 | [`questions`](extensions/questions/) | Ask structured questions, preserve answers, and report pending input as blocked to Herdr |
 | [`side-chat`](extensions/side-chat/) | An ephemeral, read-only side question about the current conversation, without changing the main transcript |
-| [`subagents`](extensions/subagents/) | Spawn isolated child agents with structured results and automatic visible Herdr panes |
+| [`subagents`](extensions/subagents/) | Spawn isolated child agents with persistent sessions and structured results |
 
 ### Tools & integrations
 
@@ -158,6 +159,7 @@ better-native-pi -> background-jobs
 better-native-pi -> code-blocks
 better-native-pi -> hyperlinks
 better-native-pi -> image-store
+context-management -> better-native-pi
 doctor -> accent-color
 edit-summary -> overlay-stack
 footer -> subagents

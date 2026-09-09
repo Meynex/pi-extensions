@@ -1,8 +1,13 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const CONTINUE_PROMPT =
-	"Automatic context compaction completed. Continue the current task from the compacted summary. " +
-	"Do not repeat completed work. If the task is already fully complete, state that briefly instead.";
+	"Automatic context compaction completed. Continue the current in-progress task from the compacted summary. " +
+	"A completed or retired session goal may be historical and must not override newer work. " +
+	"Do not repeat completed work. Only state completion if the summary shows no current work remains.";
+
+const NO_SUMMARY_CONTINUE_PROMPT =
+	"Automatic context rollover completed without a conversation summary. Continue the current in-progress task from durable context notes, " +
+	"and retrieve older session history only when needed. Do not repeat completed work.";
 
 /**
  * Pi intentionally stops after threshold-triggered auto-compaction. Queueing a
@@ -21,12 +26,14 @@ export default function (pi: ExtensionAPI) {
 		// a follow-up while the previous agent run is still active.
 		if (ctx.isIdle()) return;
 
+		const details = event.compactionEntry?.details as { contextManagement?: boolean; noSummary?: boolean } | undefined;
+		const noSummary = details?.contextManagement === true && details.noSummary === true;
 		pi.sendMessage(
 			{
 				customType: "auto-compact-continue",
-				content: CONTINUE_PROMPT,
+				content: noSummary ? NO_SUMMARY_CONTINUE_PROMPT : CONTINUE_PROMPT,
 				display: false,
-				details: { reason: event.reason },
+				details: { reason: event.reason, noSummary },
 			},
 			{
 				triggerTurn: true,

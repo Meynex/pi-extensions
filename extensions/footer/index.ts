@@ -607,7 +607,7 @@ export default function (pi: ExtensionAPI, dependencies: RuntimeDependencies = {
 						},
 					];
 
-					const statusPriority = new Map([["goal", 1], ["plan", 2]]);
+					const statusPriority = new Map([["context-management", 0], ["goal", 1], ["plan", 2]]);
 					const statuses = [...extensionStatuses.entries()]
 						.filter(([key]) => key !== "fast")
 						.sort(([left], [right]) =>
@@ -677,7 +677,10 @@ export default function (pi: ExtensionAPI, dependencies: RuntimeDependencies = {
 		invalidateUsageTotals();
 		updateActivity(false);
 	});
-	pi.on("session_compact", () => invalidateUsageTotals());
+	pi.on("session_compact", () => {
+		invalidateUsageTotals();
+		requestRender?.();
+	});
 	pi.on("session_tree", () => {
 		invalidateUsageTotals();
 	});
