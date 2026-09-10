@@ -242,19 +242,15 @@ function rendered(component: any, width = 100): string[] {
 }
 
 describe("subagents", () => {
-	test("uses the master name for visible and RPC child sessions", () => {
+	test("uses process RPC and the master name for child sessions", () => {
 		const pi = { getThinkingLevel: () => "medium", getActiveTools: () => ["read", "agents"] };
 		const ctx = { model: { provider: "test-provider", id: "test-model" } };
 		const fork = { sessionFile: "/state/context.jsonl", directory: "/state" } as any;
-		const visible = buildChildArgs(pi as any, ctx, fork, "reviewer", undefined, true);
-		const rpc = buildChildArgs(pi as any, ctx, fork, "reviewer", undefined, false);
+		const args = buildChildArgs(pi as any, ctx, fork, "reviewer");
 
-		expect(visible).not.toContain("rpc");
-		expect(rpc.slice(0, 2)).toEqual(["--mode", "rpc"]);
-		for (const args of [visible, rpc]) {
-			expect(args.slice(args.indexOf("--name"), args.indexOf("--name") + 2)).toEqual(["--name", "reviewer"]);
-			expect(args[args.indexOf("--tools") + 1]).toBe("read,report_to_parent");
-		}
+		expect(args.slice(0, 2)).toEqual(["--mode", "rpc"]);
+		expect(args.slice(args.indexOf("--name"), args.indexOf("--name") + 2)).toEqual(["--name", "Subagent · reviewer"]);
+		expect(args[args.indexOf("--tools") + 1]).toBe("read,report_to_parent");
 	});
 
 	test("compacts inherited context through Pi's model registry", async () => {
@@ -332,6 +328,7 @@ describe("subagents", () => {
 		expect(client.started).toBe(true);
 		expect(client.prompts[0]).toContain("Task:\nInspect the repository");
 		expect(client.options.env?.PI_SUBAGENT_CHILD).toBe("1");
+		expect(client.options.env?.PI_SUBAGENT_PARENT_SESSION_ID).toBe(harness.parent.getSessionId());
 		expect(client.options.args).toContain("test-provider/test-model");
 		expect(client.options.args).toContain("medium");
 		const toolsArg = client.options.args[client.options.args.indexOf("--tools") + 1];

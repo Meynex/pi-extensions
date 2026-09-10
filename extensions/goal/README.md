@@ -4,10 +4,11 @@ Track an explicit objective for the session as a **persistent, self-driving
 loop**: the objective stays in view, and after each turn
 the agent keeps working toward it until it's done or blocked.
 
-Blocked status uses settled-run auditing: the same blocker must repeat across at
-least three consecutive settled goal runs before the goal is marked blocked. A
-run can contain a `goal_block` tool turn and a final tool-less follow-up turn;
-only one matching report counts for that whole run.
+Blocked status uses settled-run auditing: three consecutive settled goal runs
+that report a blocker mark the goal blocked, even when their descriptions differ.
+A run can contain a `goal_block` tool turn and a final tool-less follow-up turn;
+only one report counts for that whole run. A settled run without a report resets
+the count.
 
 A goal is a control mode, not the default planning primitive. Ordinary coding or
 research tasks—including multi-step work—should use `update_plan` instead.
@@ -18,13 +19,15 @@ should not create a goal.
 The goal is a short statement plus optional **validation criteria**. A compact
 summary is surfaced in its own overlay card, while the full goal is available via
 `/goal-status`. Goal lifecycle updates are appended as hidden model-context
-messages, including fresh anchors after restore and compaction, so the system
-prompt remains stable. Paused, blocked, completed, and cleared transitions retire
-older active-goal instructions explicitly. When a session with a paused or blocked
-goal is reopened, the UI offers **Resume goal**, **Keep paused/blocked**, or
-**Clear goal**. Ordinary later turns are not gated on that choice. Objective and
-validation text are wrapped as untrusted user-provided data before reaching the
-model.
+messages, including fresh **active-goal** anchors after restore and compaction, so
+the system prompt remains stable. Before each model call, older anchors are pruned
+from the temporary context so only the latest persisted goal instruction remains.
+Paused, blocked, completed, and cleared transitions retire older active-goal
+instructions once; they are not re-anchored later because they must not override
+newer work. When a session with a paused or blocked goal is reopened, the UI
+offers **Resume goal**, **Keep paused/blocked**, or **Clear goal**. Ordinary later
+turns are not gated on that choice. Objective and validation text are wrapped as
+untrusted user-provided data before reaching the model.
 
 ## How the loop works
 
@@ -35,11 +38,12 @@ stored session history gets the small marker, not the full objective-bearing
 prompt. The continuation re-orients the agent around the objective and asks for
 a requirement-by-requirement completion audit before completion.
 
-A conservative read-only judge runs only at terminal boundaries: proposed
-`goal_complete`, the final repeated `goal_block` report, and anti-spin blocking
-after repeated no-tool continuations. It can veto premature completion or lazy
-blocking and feed a next action into the transient continuation prompt. It does
-not drive normal cycles.
+User-originated input (interactive or RPC) preempts automatic continuation. The
+next agent turn must reconcile that request with the active goal by keeping it, revising its complete
+objective and validation criteria, or pausing it. Revisions preserve the goal's
+identity, timing, continuation count, and append-only history. If reconciliation
+is missing or invalid when the turn settles, the extension pauses instead of
+resuming the older objective.
 
 ```
 /goal set <objective>
@@ -62,6 +66,11 @@ not drive normal cycles.
                │ model calls goal_complete ────────────────────► complete
                │ repeated goal_block reports ──────────────────► blocked
                │ user presses Esc ─────────────────────────────► pause
+               │ user request
+               ▼
+       goal_reconcile: keep ────────────────────────────────────► continue
+                       revise ──────────────────────────────────► continue
+                       pause / unresolved ──────────────────────► pause
 ```
 
 ### Safety boundaries
@@ -73,24 +82,23 @@ not drive normal cycles.
   of spinning forever.
 - **Interruption → pause** — if you abort a turn (Esc), the goal auto-pauses
   so it doesn't immediately resume on the next boundary.
-- **Provider error → blocked** — if a turn ends with a terminal provider error,
-  the goal is marked `blocked` at the next safe idle boundary instead of
-  retry-looping. Usage/rate/quota errors get a specific resume hint. Reopening
-  the session offers resume, keep, and clear choices without forcing a decision
-  on every later turn.
-- **Completion status** — the model marks the goal complete by calling
-  `goal_complete` when current evidence proves every requirement is satisfied
-  and no required work remains. A judge veto keeps the goal active and reports
-  missing evidence or a next action. Transient provider failures during the
-  nested judge call retry silently with abortable backoff before an unavailable
-  judge is reported.
-- **Blocked audit** — `goal_block` records blockers while leaving the goal
-  active until the same blocker has recurred across three settled agent runs.
-  At most one report counts per run, including runs with a final tool-less turn.
-  At the terminal threshold, the extension passes its authoritative audit count
-  to the judge because the current tool result is not yet in the transcript. The
-  judge can reject the block if actionable work remains, but does not re-audit
-  that counter. Resuming a blocked goal starts a fresh audit.
+- **User request → reconciliation** — user-originated input marks reconciliation as
+  pending. `goal_complete`, `goal_block`, `goal_resume`, and replacement through
+  `goal_set` reject the transition until the agent calls `goal_reconcile`. An
+  unresolved or invalid reconciliation pauses the loop at the next safe boundary.
+- **Provider error → pause** — if a turn ends with a terminal provider error, the
+  goal is paused at the next safe idle boundary instead of retry-looping.
+  Usage/rate/quota errors get a specific resume hint. Reopening the session offers
+  resume, keep, and clear choices without forcing a decision on every later turn.
+- **Deterministic completion** — `goal_complete` marks the goal complete directly
+  when the agent reports that current evidence satisfies every requirement. No
+  nested model call can veto or reinterpret that transition.
+- **Blocked audit** — `goal_block` records blocked runs while leaving the goal
+  active until three consecutive settled agent runs report a blocker. At most
+  one report counts per run, including runs with a final tool-less turn. Report
+  wording does not affect the count, while a run without a report resets it. The
+  third consecutive report marks the goal blocked directly. Resuming starts a
+  fresh audit.
 
 ## Commands
 
@@ -132,39 +140,42 @@ All sections except `# Goal` are optional.
   completed goal can be overwritten freely. The tool refuses to silently
   overwrite an active/paused/blocked goal and asks the caller to re-call with
   `replace: true`, so an in-progress goal cannot be silently redefined around
-  an easier task.
+  an easier task. It also refuses replacement while user-request reconciliation
+  is pending.
 - **`goal_resume`** — always available; reactivates the existing paused or
   blocked goal and restarts auto-continuation without replacing its objective,
-  validation criteria, identity, timing, or continuation history. This is the
+  validation criteria, identity, timing, or continuation history. It rejects an
+  already-active goal, including one awaiting reconciliation. This is the
   agent-callable equivalent of `/goal resume`. Reopening a session with a paused
   or blocked goal also offers this action in the UI.
 - **`goal_clear`** — always available; retires an obsolete, superseded, cancelled,
   or unrelated goal without deleting its append-only history. It is not a
   substitute for `goal_complete` when the objective was achieved.
-- **`goal_complete`** — introduced when a `/goal` first becomes active; asks the
-  judge to audit current evidence, then marks the goal complete only if the
-  judge allows it. It accepts an optional `summary`. It remains non-terminating
-  so Pi performs the follow-up model turn that delivers the final report. The
-  completion block also shows the goal's lifetime stats (active time, cycles,
-  criteria, and token usage), since the overlay card hides once the goal is
-  complete. Manual `/goal complete` surfaces the same stats once via a
+- **`goal_reconcile`** — available only while a user request is awaiting
+  reconciliation; resolves it with `keep`, `revise`, or `pause`. Revision replaces
+  the effective objective and validation criteria while preserving goal identity,
+  timing, continuation history, and prior persisted revisions.
+- **`goal_complete`** — introduced when a `/goal` first becomes active; marks the
+  goal complete directly and accepts an optional `summary`. It remains
+  non-terminating so Pi performs the follow-up model turn that delivers the final
+  report. The completion block also shows the goal's lifetime stats (active time,
+  cycles, criteria, and token usage), since the overlay card hides once the goal
+  is complete. Manual `/goal complete` surfaces the same stats once via a
   notification.
 - **`goal_block`** — introduced when a `/goal` first becomes active; records a
-  blocker and terminates the current agent run so the next report belongs to a
-  fresh settled run. Optional fields can describe the blocker, attempted work,
-  supporting detail, and next input; marks the goal `blocked` only after the same
-  blocker repeats across three settled agent runs and the judge accepts the
-  terminal block. Multiple reports in one run count once.
+  blocked run and terminates the current agent run so the next report belongs to
+  a fresh settled run. Optional fields can describe the blocker, attempted work,
+  supporting detail, and next input. Three consecutive blocked runs stop the
+  goal regardless of wording. Multiple reports in one run count once.
 
-`goal_set`, `goal_resume`, and `goal_clear` are always registered. `goal_complete`
-and `goal_block` start inactive, are added when the first goal becomes active, and
-remain in the active loadout for the rest of that session. This monotonic
-activation preserves deferred-tool and prompt-cache reuse across pause, block,
-completion, and clear transitions. Stale `goal_complete` and `goal_block` calls
-made while no goal is active are ignored silently so they do not add noisy output
-to the transcript; the rendered block is hidden too.
+`goal_set`, `goal_resume`, and `goal_clear` are always registered.
+`goal_complete` and `goal_block` start inactive, are added when the first goal
+becomes active, and remain in the active loadout for the rest of that session.
+`goal_reconcile` is added only while reconciliation is pending and removed as soon
+as it resolves or the goal pauses. Stale queued calls are ignored silently so they
+do not add noisy output to the transcript; the rendered block is hidden too.
 
-All five tools render as the same compact 2-line transcript blocks as the native
+All six tools render as the same compact 2-line transcript blocks as the native
 and web tools (`renderShell: "self"`): a `• verb` headline whose bullet color
 tracks the outcome (magenta while running, green on success, red for a real
 blocker) over a dim `└ summary` branch. Example settled blocks:
@@ -187,15 +198,15 @@ blocker) over a dim `└ summary` branch. Example settled blocks:
   └ flaky CI on macOS · next: re-run after runner image bumped
 • Blocker recorded
   └ flaky CI on macOS · goal remains active · 1/3
-• Completion denied by judge
-  └ tests were not run
-• Blocker rejected by judge
-  └ inspect the available logs first
+• Revised goal
+  └ validate 100k hosts and sharding
+• Kept goal
+  └ ship the feature
+• Paused goal
+  └ inspect another repository
 ```
 
-Judge veto blocks keep the collapsed branch to one viewport-fitted line and show
-full denial details when expanded, matching native tool expansion behavior. Goal
-set/replaced/already-active blocks use a head/tail objective preview plus one
+Goal set/replaced/already-active blocks use a head/tail objective preview plus one
 preserved metadata group such as `3 criteria, Ctrl+O for full details`, then
 expand to the full objective and validation text.
 
@@ -226,6 +237,6 @@ Status colors: `● active` (green), `● paused` (yellow), `● blocked` (red),
 
 ## Dependencies
 
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API and bundled `@earendil-works/pi-ai` compatibility completion helper.
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
 - **Depends on extensions:** None.
 - **Used by extensions:** None.

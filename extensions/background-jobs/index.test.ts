@@ -2,9 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";
 import registerBetterNativeBash from "../better-native-pi/bash";
+import { shortPath } from "../better-native-pi/render";
 import registerBackgroundJobs, { BoundedOutput, CursorOutput, JobOutputViewer } from "./index";
 import { sanitizeTerminalOutput } from "./output";
 import { isPtySupported } from "./terminal-process";
@@ -555,13 +556,14 @@ describe("terminal tools", () => {
 		expect(noOp).toBe("<warning>◷</warning> confirm-app-he-ff5ed8c6 is already timed out.");
 	});
 
-	test("returns quick commands normally and clears persistent status", async () => {
+	test("shows an overridden cwd while returning quick commands normally", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
 		const tool = harness.tools.get("bash");
 		const args = {
 			command: "printf 'quick-output'",
 			reasoning: "test quick execution",
+			cwd: "extensions",
 		};
 		const result = await tool.execute("exec", args, undefined, undefined, harness.ctx);
 
@@ -576,7 +578,25 @@ describe("terminal tools", () => {
 			state: {}, args, cwd: harness.ctx.cwd, invalidate() {},
 		}).render(120).join("\n");
 		expect(rendered).toContain("quick-output");
+		const renderedCwd = shortPath(resolve(harness.ctx.cwd, args.cwd));
+		const cwdLine = rendered.split("\n").find((line) => line.includes(renderedCwd));
+		expect(cwdLine).toContain("└ in ");
 		expect(rendered).not.toContain(result.details.id);
+	});
+
+	test("omits the cwd row when bash uses Pi's current directory", async () => {
+		const harness = createHarness();
+		await startHarness(harness);
+		const tool = harness.tools.get("bash");
+		const args = { command: "printf 'same-directory'", reasoning: "test compact cwd display" };
+		const result = await tool.execute("exec", args, undefined, undefined, harness.ctx);
+		const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+		const rendered = tool.renderResult(result, { expanded: false }, theme, {
+			state: {}, args, cwd: harness.ctx.cwd, invalidate() {},
+		}).render(120).join("\n");
+
+		expect(rendered).toContain("same-directory");
+		expect(rendered).not.toContain("└ in ");
 	});
 
 	test("exposes current Pi session metadata and removes stale inherited values", async () => {
@@ -854,7 +874,7 @@ describe("terminal tools", () => {
 		}
 	});
 
-	test("ticks a live yielded card and stops once it completes", async () => {
+	test("keeps a yielded card static until the job completes", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
 		const tool = harness.tools.get("bash");
@@ -872,38 +892,29 @@ describe("terminal tools", () => {
 			cwd: harness.ctx.cwd,
 			invalidate() { invalidations += 1; },
 		});
-		const headlineOf = (lines: string[]) =>
-			lines.find((line) => line.includes("test change-driven redraws")) ?? "";
-		const elapsedMsOf = (lines: string[]): number => {
-			const match = headlineOf(lines).match(/(\d+)(ms|s)\b/);
-			if (!match) throw new Error(`no elapsed time in headline: ${headlineOf(lines)}`);
-			return Number(match[1]) * (match[2] === "s" ? 1000 : 1);
-		};
 
-		const firstRender = component.render(120);
-		const firstElapsed = elapsedMsOf(firstRender);
-		expect(firstRender.join("\n")).toContain("Running test change-driven redraws");
-		expect(firstRender.join("\n")).toContain("running · /ps");
+		const running = component.render(120).join("\n");
+		expect(running).toContain("Running test change-driven redraws");
+		expect(running).toContain("running · /ps");
 
-		// The shared 1s ticker advances the elapsed headline while the job runs.
+		// A yielded card is historical transcript content. Keep it byte-stable
+		// while the job is idle instead of invalidating the transcript each second.
 		await Bun.sleep(1_400);
-		const tickedRender = component.render(120);
-		expect(elapsedMsOf(tickedRender)).toBeGreaterThan(firstElapsed);
-		expect(invalidations).toBeGreaterThanOrEqual(1);
+		expect(component.render(120).join("\n")).toBe(running);
+		expect(invalidations).toBe(0);
 
 		await harness.tools.get("job_output").execute("wait", {
 			job_id: started.details.id,
 			wait: true,
 		});
-		// Completion settles the card; the ticker stops, so later renders are
-		// byte-identical and no further invalidations arrive.
+		// Completion invalidates once so the card records final status and duration.
 		const settled = component.render(120).join("\n");
 		expect(settled).toContain("completed");
 		expect(settled).not.toContain("/ps");
-		const invalidationsAtSettle = invalidations;
+		expect(invalidations).toBe(1);
 		await Bun.sleep(1_400);
 		expect(component.render(120).join("\n")).toBe(settled);
-		expect(invalidations).toBe(invalidationsAtSettle);
+		expect(invalidations).toBe(1);
 		component.dispose?.();
 		await shutdownHarness(harness);
 	});

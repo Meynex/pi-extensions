@@ -17,6 +17,7 @@
       "./extensions/cached-line-resets",
       "./extensions/code-blocks",
       "./extensions/context-inspector",
+      "./extensions/context-management",
       "./extensions/doctor",
       "./extensions/edit-summary",
       "./extensions/footer",
