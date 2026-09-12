@@ -91,3 +91,54 @@ test("resolve-conflicts fails when no unmerged paths exist", () => {
 	expect(result.status).toBe(1);
 	expect(result.stderr).toContain("no merge conflicts to resolve");
 });
+
+test("check-diff-secrets ignores obvious synthetic placeholders", () => {
+	const root = createRepo();
+	write(root, "extensions/subagents/index.test.ts", 'const secret = "synthetic-private-token-12345";\n');
+	git(root, "add", "extensions/subagents/index.test.ts");
+	git(root, "commit", "-m", "add synthetic secret fixture");
+
+	const result = spawnSync("node", [scriptPath, "check-diff-secrets"], {
+		cwd: root,
+		encoding: "utf8",
+		env: { ...process.env, SYNC_BASE_REF: "HEAD~1" },
+	});
+
+	expect(result.status).toBe(0);
+	expect(result.stdout).toContain("secret scan ok");
+});
+
+test("check-diff-secrets blocks non-placeholder secrets", () => {
+	const root = createRepo();
+	write(root, "extensions/subagents/index.test.ts", 'const token = "live-private-token-1234567890"; const label = "test fixture";\n');
+	git(root, "add", "extensions/subagents/index.test.ts");
+	git(root, "commit", "-m", "add real secret fixture");
+
+	const result = spawnSync("node", [scriptPath, "check-diff-secrets"], {
+		cwd: root,
+		encoding: "utf8",
+		env: { ...process.env, SYNC_BASE_REF: "HEAD~1" },
+	});
+
+	expect(result.status).toBe(1);
+	expect(result.stderr).toContain("possible non-placeholder secret");
+	expect(result.stderr).toContain('const token = "live-private-token-1234567890"; const label = "test fixture";');
+});
+
+test("check-diff-secrets allows deleting an existing secret", () => {
+	const root = createRepo();
+	write(root, "extensions/subagents/index.test.ts", 'const token = "live-private-token-1234567890";\n');
+	git(root, "add", "extensions/subagents/index.test.ts");
+	git(root, "commit", "-m", "add removable secret fixture");
+	git(root, "rm", "extensions/subagents/index.test.ts");
+	git(root, "commit", "-m", "remove secret fixture");
+
+	const result = spawnSync("node", [scriptPath, "check-diff-secrets"], {
+		cwd: root,
+		encoding: "utf8",
+		env: { ...process.env, SYNC_BASE_REF: "HEAD~1" },
+	});
+
+	expect(result.status).toBe(0);
+	expect(result.stdout).toContain("secret scan ok");
+});
