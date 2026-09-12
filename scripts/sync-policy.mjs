@@ -114,15 +114,15 @@ function resolveConflicts() {
   console.log(`sync-policy: kept local versions for ${paths.join(", ")}`);
 }
 
-function diffContentLines(diff) {
+function addedDiffContentLines(diff) {
   return diff
     .split("\n")
-    .filter((line) => /^(?:\+|-)/.test(line))
-    .filter((line) => !/^(?:\+\+\+|---)/.test(line));
+    .filter((line) => /^\+/.test(line))
+    .filter((line) => !/^\+\+\+/.test(line));
 }
 
 function findPossibleSecretMatches(diff) {
-  return diffContentLines(diff).flatMap((line) => {
+  return addedDiffContentLines(diff).flatMap((line) => {
     const match = line.match(possibleSecretPattern);
     if (!match) return [];
     return placeholderSecretValuePattern.test(match[1] ?? "") ? [] : [line];
