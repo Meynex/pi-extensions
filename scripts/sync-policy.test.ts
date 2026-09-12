@@ -110,7 +110,7 @@ test("check-diff-secrets ignores obvious synthetic placeholders", () => {
 
 test("check-diff-secrets blocks non-placeholder secrets", () => {
 	const root = createRepo();
-	write(root, "extensions/subagents/index.test.ts", 'const token = "live-private-token-1234567890";\n');
+	write(root, "extensions/subagents/index.test.ts", 'const token = "live-private-token-1234567890"; const label = "test fixture";\n');
 	git(root, "add", "extensions/subagents/index.test.ts");
 	git(root, "commit", "-m", "add real secret fixture");
 
@@ -122,5 +122,5 @@ test("check-diff-secrets blocks non-placeholder secrets", () => {
 
 	expect(result.status).toBe(1);
 	expect(result.stderr).toContain("possible non-placeholder secret");
-	expect(result.stderr).toContain('const token = "live-private-token-1234567890";');
+	expect(result.stderr).toContain('const token = "live-private-token-1234567890"; const label = "test fixture";');
 });

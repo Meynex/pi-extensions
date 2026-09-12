@@ -25,8 +25,8 @@ const extensionNames = readdirSync("extensions", { withFileTypes: true })
   .map((entry) => entry.name)
   .sort((left, right) => left.localeCompare(right));
 const expectedExtensions = extensionNames.map((name) => `./extensions/${name}`);
-const possibleSecretPattern = /(?:api[_-]?key|token|secret|password|private[_-]?key)\s*[:=]\s*(?!process\.env\b|\$\{\{\s*secrets\.|\$\{\{\s*github\.token\b)(?:['"])?[A-Za-z0-9_./+=-]{16,}/i;
-const placeholderSecretPattern = /\b(?:dummy|example|fake|mock|placeholder|sample|synthetic|test[-_]?)\b/i;
+const possibleSecretPattern = /(?:api[_-]?key|token|secret|password|private[_-]?key)\s*[:=]\s*(?!process\.env\b|\$\{\{\s*secrets\.|\$\{\{\s*github\.token\b)(?:['"])?([A-Za-z0-9_./+=-]{16,})/i;
+const placeholderSecretValuePattern = /\b(?:dummy|example|fake|mock|placeholder|sample|synthetic|test[-_]?)\b/i;
 
 function readPackage() {
   return JSON.parse(readFileSync("package.json", "utf8"));
@@ -122,9 +122,11 @@ function diffContentLines(diff) {
 }
 
 function findPossibleSecretMatches(diff) {
-  return diffContentLines(diff)
-    .filter((line) => possibleSecretPattern.test(line))
-    .filter((line) => !placeholderSecretPattern.test(line));
+  return diffContentLines(diff).flatMap((line) => {
+    const match = line.match(possibleSecretPattern);
+    if (!match) return [];
+    return placeholderSecretValuePattern.test(match[1] ?? "") ? [] : [line];
+  });
 }
 
 function checkDiffSecrets(baseRef) {
