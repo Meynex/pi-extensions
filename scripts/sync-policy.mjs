@@ -3,9 +3,9 @@ import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const mode = process.argv[2] ?? "check";
-const allowedModes = new Set(["apply", "check", "report", "resolve-conflicts"]);
+const allowedModes = new Set(["apply", "check", "check-diff-secrets", "report", "resolve-conflicts"]);
 if (!allowedModes.has(mode)) {
-  console.error(`Usage: node scripts/sync-policy.mjs apply|check|report|resolve-conflicts`);
+  console.error(`Usage: node scripts/sync-policy.mjs apply|check|check-diff-secrets|report|resolve-conflicts`);
   process.exit(2);
 }
 
@@ -25,6 +25,8 @@ const extensionNames = readdirSync("extensions", { withFileTypes: true })
   .map((entry) => entry.name)
   .sort((left, right) => left.localeCompare(right));
 const expectedExtensions = extensionNames.map((name) => `./extensions/${name}`);
+const possibleSecretPattern = /(?:api[_-]?key|token|secret|password|private[_-]?key)\s*[:=]\s*(?!process\.env\b|\$\{\{\s*secrets\.|\$\{\{\s*github\.token\b)(?:['"])?([A-Za-z0-9_./+=-]{16,})/i;
+const placeholderSecretValuePattern = /\b(?:dummy|example|fake|mock|placeholder|sample|synthetic|test[-_]?)\b/i;
 
 function readPackage() {
   return JSON.parse(readFileSync("package.json", "utf8"));
@@ -112,11 +114,35 @@ function resolveConflicts() {
   console.log(`sync-policy: kept local versions for ${paths.join(", ")}`);
 }
 
+function addedDiffContentLines(diff) {
+  return diff
+    .split("\n")
+    .filter((line) => /^\+/.test(line))
+    .filter((line) => !/^\+\+\+/.test(line));
+}
+
+function findPossibleSecretMatches(diff) {
+  return addedDiffContentLines(diff).flatMap((line) => {
+    const match = line.match(possibleSecretPattern);
+    if (!match) return [];
+    return placeholderSecretValuePattern.test(match[1] ?? "") ? [] : [line];
+  });
+}
+
+function checkDiffSecrets(baseRef) {
+  const matches = findPossibleSecretMatches(diffText(baseRef));
+  if (matches.length > 0) {
+    console.error("BLOCK: possible non-placeholder secret in diff");
+    for (const line of matches) console.error(line);
+    process.exit(1);
+  }
+  console.log("secret scan ok");
+}
+
 function scanDiff(baseRef) {
   const diff = diffText(baseRef);
   const findings = [];
   const patterns = [
-    ["possible_secret", /(?:api[_-]?key|token|secret|password|private[_-]?key)\s*[:=]\s*(?!process\.env\b|\$\{\{\s*secrets\.|\$\{\{\s*github\.token\b)(?:['\"])?[A-Za-z0-9_./+=-]{16,}/i],
     ["tool_registration", /pi\.registerTool\s*\(/],
     ["provider_registration", /pi\.registerProvider\s*\(/],
     ["tool_call_interceptor", /pi\.on\(['\"]tool_call['\"]/],
@@ -126,6 +152,7 @@ function scanDiff(baseRef) {
     ["filesystem_access", /\b(readFile|readFileSync|writeFile|writeFileSync|appendFile|appendFileSync|rm|rmSync|unlink|unlinkSync|rename|renameSync|mkdir|mkdirSync)\s*\(/],
     ["prompt_or_system_change", /(systemPrompt|promptGuidelines|promptSnippet|before_agent_start)/],
   ];
+  if (findPossibleSecretMatches(diff).length > 0) findings.push("possible_secret");
   for (const [name, pattern] of patterns) {
     if (pattern.test(diff)) findings.push(name);
   }
@@ -162,6 +189,11 @@ if (mode === "check") {
     process.exit(1);
   }
   console.log(`sync-policy: PASS (${expectedExtensions.length} extensions, web-search excluded)`);
+}
+
+if (mode === "check-diff-secrets") {
+  const baseRef = process.env.SYNC_BASE_REF ?? "origin/main";
+  checkDiffSecrets(baseRef);
 }
 
 if (mode === "report") {

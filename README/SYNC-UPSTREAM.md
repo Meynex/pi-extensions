@@ -47,7 +47,7 @@ The workflow:
 3. creates or updates `bot/upstream-sync-<upstream-default-branch>`
 4. merges upstream into the sync branch and automatically keeps the fork version of selected Herdr/visible-subagent files if that merge hits their known conflict set
 5. reapplies the local package policy excluding `web-search`
-6. runs static checks and a conservative diff secret scan
+6. runs static checks and a conservative diff secret scan that ignores obvious synthetic test placeholders
 7. generates a PR body with commits, diffstat, inferred bugfixes/improvements, risks, and tests
 8. runs three separated GitHub Copilot CLI reviews using `gpt-5.6-luna` if available
 9. creates or updates a PR against `main`
