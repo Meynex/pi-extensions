@@ -38,7 +38,8 @@ For an interactive prompt, call `bash` with `tty: true`; if it yields, send the
 answer with `terminal_write`. `terminal_write` also accepts literal control
 characters, including `\u0003` for Ctrl+C. PTY mode uses the system `expect`
 utility on macOS and `script` from util-linux on Linux, avoiding a native Node
-dependency.
+dependency. Linux resolves an executable `script` through `PATH`, including NixOS
+system-profile paths.
 
 ## User experience
 
@@ -125,6 +126,7 @@ entry.
 ## Output and lifecycle guarantees
 
 - Polls return cursor-based deltas rather than repeating old output.
+- Known questionnaire secrets are replaced with `[redacted]` in command metadata and stdout/stderr before output enters the transcript, live viewer, or cursor buffers. Split output chunks are joined before matching; a possible secret prefix waits for more output or process exit. Interactive input can add redaction rules after a command starts. This covers literal values, not encoded output or files/logs written by the command.
 - Foreground command updates are coalesced after 250ms of quiet, with a 500ms maximum wait during continuous output.
 - Foreground managed cards share one elapsed-time ticker. Yielded transcript cards do not tick; completion settles each card once with its final duration.
 - Settled transcript cards are immutable and never poll or invalidate the transcript again.

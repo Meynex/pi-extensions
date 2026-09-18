@@ -7,7 +7,8 @@ import { initTheme, SessionManager } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { compactContext, createContextFork, forkableMessages, type CompactContext, type ContextMode } from "./context";
 import registerSubagents, { boundedText, buildChildArgs } from "./index";
-import { isProviderLimitError } from "./lifecycle";
+import { isProviderLimitError, type AgentSnapshot } from "./lifecycle";
+import { formatAgent } from "./rendering";
 import { RpcProcessClient, type AgentClient, type AgentClientFactory, type AgentClientOptions, type RpcAgentEvent } from "./rpc";
 
 initTheme("dark", false);
@@ -242,6 +243,24 @@ function rendered(component: any, width = 100): string[] {
 }
 
 describe("subagents", () => {
+	test("formats costs with cents precision", () => {
+		const agent = {
+			id: "cheap-reviewer",
+			name: "cheap reviewer",
+			status: "completed",
+			contextMode: "fresh",
+			cwd: "/workspace",
+			task: "Review one line",
+			startedAt: 1,
+			output: "Done",
+			activity: [],
+			usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0.00004, turns: 1 },
+		} satisfies AgentSnapshot;
+
+		expect(formatAgent(agent, false)).toContain("<$0.01");
+		expect(formatAgent({ ...agent, usage: { ...agent.usage, cost: 1.234 } }, false)).toContain("$1.23");
+	});
+
 	test("uses process RPC and the master name for child sessions", () => {
 		const pi = { getThinkingLevel: () => "medium", getActiveTools: () => ["read", "agents"] };
 		const ctx = { model: { provider: "test-provider", id: "test-model" } };
@@ -623,7 +642,7 @@ describe("subagents", () => {
 		expect(collapsed[1]).toContain(first.details.agents[0].name);
 		expect(collapsed[2]).toBe("    Task    Inspect API");
 		expect(collapsed[3]).toBe("    Result  API review complete.");
-		expect(collapsed[4]).toContain("    1 turn · ↑10 · ↓5 · R2 · W3 · $0.0100 · test-provider/test-model");
+		expect(collapsed[4]).toContain("    1 turn · ↑10 · ↓5 · R2 · W3 · $0.01 · test-provider/test-model");
 		expect(harness.sentMessages).toHaveLength(0);
 		const expanded = rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: true }, renderTheme, { args: waitArgs }), 60);
 		expect(expanded.join("\n")).toContain("API review complete.");
@@ -700,7 +719,7 @@ describe("subagents", () => {
 		expect(compactLines[1]).not.toContain("context");
 		expect(compactLines[2]).toBe("    Task    Review renderer");
 		expect(compactLines[3]).toBe("    Result  Renderer matches the shared design.");
-		expect(compactLines[4]).toContain("    1 turn · ↑10 · ↓5 · R2 · W3 · $0.0100 · test-provider/test-model");
+		expect(compactLines[4]).toContain("    1 turn · ↑10 · ↓5 · R2 · W3 · $0.01 · test-provider/test-model");
 		const styledLines = renderer(message, { expanded: false }, semanticTheme).render(100);
 		expect(styledLines[1]).toContain(`\x1b[39m${message.details.name}\x1b[0m`);
 		expect(styledLines[2]).toContain("\x1b[36mTask  \x1b[0m  \x1b[37mReview renderer\x1b[0m");
@@ -1647,6 +1666,13 @@ setInterval(() => {}, 1000);
 		const started = await spawnAgent(harness, "Long-running investigation");
 		const name = started.details.agents[0].name;
 		const originalSession = harness.clients[0].options.args[harness.clients[0].options.args.indexOf("--session") + 1];
+		const client = harness.clients[0];
+		client.abort = async () => {
+			client.abortCalls += 1;
+			// Events already in flight must not revive an interrupted child.
+			client.emit({ type: "agent_start" });
+			client.complete("Partial answer retained", "aborted");
+		};
 		const args = { reasoning: "Stop broad investigation", action: "interrupt", agent_name: name };
 		const interrupted = await harness.tool.execute("interrupt", args, undefined, undefined, harness.ctx);
 		expect(interrupted.details.agents[0].status).toBe("interrupted");
@@ -1737,6 +1763,11 @@ setInterval(() => {}, 1000);
 		const name = started.details.agents[0].name;
 		const sessionFile = first.clients[0].options.args[first.clients[0].options.args.indexOf("--session") + 1];
 		expect(sessionFile.startsWith(first.storageRoot)).toBe(true);
+		first.clients[0].abort = async () => {
+			first.clients[0].abortCalls += 1;
+			first.clients[0].emit({ type: "agent_start" });
+			first.clients[0].complete("Partial answer retained", "aborted");
+		};
 
 		await first.handlers.get("session_shutdown")?.({ reason: "reload" }, first.ctx);
 		expect(first.clients[0].abortCalls).toBe(1);
@@ -1826,6 +1857,42 @@ setInterval(() => {}, 1000);
 		expect(restored.clients).toHaveLength(1);
 		expect(restored.clients[0].options.args[restored.clients[0].options.args.indexOf("--session") + 1]).toBe(sessionFile);
 	});
+
+	for (const phase of ["context", "startup"] as const) {
+		test(`cancels a spawn during ${phase} without dispatching its task`, async () => {
+			let release!: () => void;
+			let entered!: () => void;
+			const gate = new Promise<void>((resolve) => { release = resolve; });
+			const ready = new Promise<void>((resolve) => { entered = resolve; });
+			const clients: FakeClient[] = [];
+			const harness = createHarness({
+				maxAgents: 1,
+				forkContext: async (...args) => {
+					if (phase === "context") { entered(); await gate; }
+					return createContextFork(...args);
+				},
+				clientFactory: (options) => {
+					const client = new FakeClient(options);
+					clients.push(client);
+					if (phase === "startup") client.start = async () => { entered(); await gate; client.started = true; };
+					return client;
+				},
+			});
+			const controller = new AbortController();
+			const spawning = harness.tool.execute("cancelled-spawn", {
+				action: "spawn", name: `cancelled-${phase}`, task: "Must not execute",
+			}, controller.signal, undefined, harness.ctx);
+			await ready;
+			controller.abort(new Error("Cancelled startup"));
+			release();
+			await expect(spawning).rejects.toThrow("Cancelled startup");
+			expect(clients.flatMap((client) => client.prompts)).toEqual([]);
+			expect(clients.every((client) => client.stopped)).toBe(true);
+			expect(harness.sentMessages).toEqual([]);
+			const listed = await harness.tool.execute("list", { action: "list" }, undefined, undefined, harness.ctx);
+			expect(listed.details.agents.every((agent: any) => agent.status === "closed")).toBe(true);
+		});
+	}
 
 	test("cancels a spawn that outlives parent session shutdown", async () => {
 		let releaseContext!: () => void;
