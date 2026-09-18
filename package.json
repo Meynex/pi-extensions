@@ -10,7 +10,6 @@
   "pi": {
     "extensions": [
       "./extensions/accent-color",
-      "./extensions/auto-compact-continue",
       "./extensions/auto-session-title",
       "./extensions/background-jobs",
       "./extensions/better-native-pi",
@@ -24,7 +23,6 @@
       "./extensions/goal",
       "./extensions/herdr-process",
       "./extensions/herdr-tab-title",
-      "./extensions/history-search",
       "./extensions/hyperlinks",
       "./extensions/image-store",
       "./extensions/model-switch-affinity",
