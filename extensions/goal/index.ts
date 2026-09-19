@@ -19,6 +19,9 @@ const CONTINUATION_CUSTOM_TYPE = "goal-continuation";
 const CONTINUATION_TRIGGER_CONTENT = "Goal continuation requested.";
 const BLOCKED_AUDIT_THRESHOLD = 3;
 const GOAL_RECONCILE_TOOL_NAME = "goal_reconcile";
+const GOAL_RESUME_TOOL_NAME = "goal_resume";
+const GOAL_SET_TOOL_NAME = "goal_set";
+const GOAL_CLEAR_TOOL_NAME = "goal_clear";
 const GOAL_TERMINAL_TOOL_NAMES = ["goal_complete", "goal_block"] as const;
 const GOAL_TOOL_NAMES = [...GOAL_TERMINAL_TOOL_NAMES, GOAL_RECONCILE_TOOL_NAME] as const;
 const GOAL_TOOL_NAME_SET = new Set<string>(GOAL_TOOL_NAMES);
@@ -121,7 +124,7 @@ export function parseGoalDocument(document: string): ParsedGoalDocument {
 }
 
 function elapsedMs(state: GoalState, now = Date.now()): number {
-	return state.accumulatedActiveMs + (state.status === "active" && state.activeSince ? Math.max(0, now - state.activeSince) : 0);
+	return state.accumulatedActiveMs + (state.status === "active" && state.activeSince !== undefined ? Math.max(0, now - state.activeSince) : 0);
 }
 
 function displayState(state: GoalState, now = Date.now()): GoalDisplayState {
@@ -487,7 +490,7 @@ interface GoalToolResultDetails {
 	set?: boolean;
 	/** goal_set overwrote an existing goal. */
 	replaced?: boolean;
-	/** goal_set refused because a goal is in progress and replace was not set. */
+	/** goal_set refused because an inactive goal exists and replace was not set. */
 	needsReplace?: boolean;
 	/** goal_resume reactivated the existing goal without replacing it. */
 	resumed?: boolean;
@@ -729,6 +732,7 @@ function renderGoalResumeResult(
 ): Component {
 	if (isPartial) return new Container();
 	const details = result?.details;
+	if (details?.ignored) return new Container();
 	const component = reuseGoalToolLines(context);
 	const storedText = textFromResult(result);
 	const objective = extractObjectiveLine(storedText);
@@ -763,6 +767,7 @@ function renderGoalClearResult(
 ): Component {
 	if (isPartial) return new Container();
 	const details = result?.details;
+	if (details?.ignored) return new Container();
 	const component = reuseGoalToolLines(context);
 	const storedText = textFromResult(result);
 	const objective = extractObjectiveLine(storedText);
@@ -786,7 +791,7 @@ function renderGoalClearResult(
  *  - partial → `• Setting goal` (magenta) with the objective preview.
  *  - set → `• Set goal` (green) + the objective branch.
  *  - replaced → `• Replaced goal` (green) + the new objective branch.
- *  - needsReplace → `• Goal already active` (green) + the active objective,
+ *  - needsReplace → `• Goal already exists` (green) + the existing objective,
  *    prompting the caller to pass `replace: true`.
  */
 function renderGoalSetCall(args: any, _theme: any, context: any): Component {
@@ -805,13 +810,14 @@ function renderGoalSetResult(
 ): Component {
 	if (isPartial) return new Container();
 	const details = result?.details;
+	if (details?.ignored) return new Container();
 	const component = reuseGoalToolLines(context);
 	const storedText = textFromResult(result);
 	const objective = extractObjectiveLine(storedText);
 	component.update(() => {
 		if (details?.needsReplace) {
 			const lines = [
-				toolHeadline(false, false, "Goal already active", ""),
+				toolHeadline(false, false, "Goal already exists", ""),
 				toolBranch(goalSetBranch(objective, storedText, theme)),
 			];
 			if (expanded) lines.push(...expandedResultLines(storedText, theme));
@@ -939,7 +945,18 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		if (!Array.isArray(active)) return;
 
 		const reconciliationPending = state?.status === "active" && state.reconciliationPending === true;
-		let next = active.filter((name: string) => name !== GOAL_RECONCILE_TOOL_NAME || reconciliationPending);
+		const resumeAvailable = state?.status === "paused" || state?.status === "blocked";
+		const clearAvailable = resumeAvailable;
+		const setAvailable = state?.status !== "active";
+		let next = active.filter((name: string) =>
+			(name !== GOAL_RECONCILE_TOOL_NAME || reconciliationPending)
+			&& (name !== GOAL_RESUME_TOOL_NAME || resumeAvailable)
+			&& (name !== GOAL_CLEAR_TOOL_NAME || clearAvailable)
+			&& (name !== GOAL_SET_TOOL_NAME || setAvailable));
+
+		if (resumeAvailable && !next.includes(GOAL_RESUME_TOOL_NAME)) next.push(GOAL_RESUME_TOOL_NAME);
+		if (clearAvailable && !next.includes(GOAL_CLEAR_TOOL_NAME)) next.push(GOAL_CLEAR_TOOL_NAME);
+		if (setAvailable && !next.includes(GOAL_SET_TOOL_NAME)) next.push(GOAL_SET_TOOL_NAME);
 
 		if (state?.status === "active") {
 			goalToolsIntroduced = true;
@@ -957,12 +974,13 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		if (changed) setActiveTools.call(pi, next);
 	};
 
-	const inactiveGoalToolResult = (reason: string) => ({
+	const inactiveGoalToolResult = (reason: string, terminate = false) => ({
 		// Stale model requests may still contain a goal tool call from before the
 		// active-tool set was refreshed. Keep that misuse invisible to the user;
-		// the tools are removed from future requests whenever no goal is active.
+		// the tools are removed from future requests whenever they are invalid.
 		content: [{ type: "text" as const, text: "" }],
 		details: { ok: false, ignored: true, reason },
+		terminate,
 	});
 
 	const emit = (ctx: any) => {
@@ -1390,7 +1408,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 	// State persistence / restore
 	// ------------------------------------------------------------------------
 
-	const restoreState = (ctx: any) => {
+	const restoreState = (ctx: any, restartClock = false) => {
 		activeCtx = ctx;
 		state = undefined;
 		let lastKnownGoal: GoalState | undefined;
@@ -1456,6 +1474,13 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 			};
 			lastKnownGoal = state;
 		}
+		if (state?.status === "active" && (restartClock || state.activeSince === undefined)) {
+			// After an unclean exit, only count through the last persisted observation.
+			state.accumulatedActiveMs = elapsedMs(state, state.updatedAt);
+			state.activeSince = Date.now();
+			state.updatedAt = state.activeSince;
+			persist();
+		}
 		refreshOverlayStats(ctx, true);
 		emit(ctx);
 		if (state?.status === "active") {
@@ -1474,7 +1499,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 	};
 
 	pi.on("session_start", async (event, ctx) => {
-		restoreState(ctx);
+		restoreState(ctx, true);
 		if (!ctx.hasUI || (event.reason !== "startup" && event.reason !== "resume")) return;
 		if (!state || (state.status !== "paused" && state.status !== "blocked")) return;
 
@@ -1688,10 +1713,10 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 	});
 
 	// ------------------------------------------------------------------------
-	// goal_resume / goal_clear / goal_set are always available. They are
-	// intentionally NOT part of GOAL_TOOL_NAME_SET, so paused and blocked goals
-	// remain controllable while goal_reconcile / goal_complete / goal_block stay
-	// gated on active state.
+	// goal_resume and goal_clear are exposed only for paused or blocked goals,
+	// while goal_set is hidden for an active goal so scope changes go through
+	// reconciliation. Execution still rejects stale calls because a model turn
+	// may retain an older tool snapshot.
 	// ------------------------------------------------------------------------
 	pi.registerTool({
 		name: "goal_resume",
@@ -1704,30 +1729,11 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		renderCall: renderGoalResumeCall,
 		renderResult: renderGoalResumeResult,
 		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-			if (!state) {
-				return {
-					content: [{ type: "text", text: "No session goal to resume." }],
-					details: { ok: false, reason: "no-goal" },
-				};
-			}
+			if (!state) return inactiveGoalToolResult("no-goal", true);
 			if (state.status === "active") {
-				const reconciliationRequired = state.reconciliationPending === true;
-				return {
-					content: [{
-						type: "text",
-						text: reconciliationRequired
-							? "The goal is active and the latest user request still requires goal_reconcile. goal_resume cannot clear that requirement."
-							: "The session goal is already active.",
-					}],
-					details: { ok: false, reason: reconciliationRequired ? "reconciliation-required" : "goal-active" },
-				};
+				return inactiveGoalToolResult(state.reconciliationPending ? "reconciliation-required" : "goal-active", true);
 			}
-			if (state.status === "complete") {
-				return {
-					content: [{ type: "text", text: "A completed goal cannot be resumed. Set or edit a goal instead." }],
-					details: { ok: false, reason: "goal-complete" },
-				};
-			}
+			if (state.status === "complete") return inactiveGoalToolResult("goal-complete", true);
 			const objective = state.objective;
 			const previousStatus = await resumeGoal(ctx);
 			return {
@@ -1751,13 +1757,16 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		renderCall: renderGoalClearCall,
 		renderResult: renderGoalClearResult,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const cleared = clearGoal(ctx);
-			if (!cleared) {
+			if (!state) {
 				return {
 					content: [{ type: "text", text: "No session goal to clear." }],
 					details: { ok: false, reason: "no-goal" },
 				};
 			}
+			if (state.status !== "paused" && state.status !== "blocked") {
+				return inactiveGoalToolResult(`goal-${state.status}`, true);
+			}
+			const cleared = clearGoal(ctx)!;
 			const reason = params.reason?.trim();
 			return {
 				content: [{ type: "text", text: `Goal cleared.\nObjective: ${cleared.objective}${reason ? `\nReason: ${reason}` : ""}` }],
@@ -1766,43 +1775,44 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		},
 	});
 
-	// goal_set lets the agent create or replace a goal without a user running
-	// /goal. Replacing an active/paused/blocked goal requires replace:true so the
-	// agent cannot silently redefine in-progress work around an easier task.
+	// goal_set lets the agent create a goal without a user running /goal and can
+	// replace paused or blocked work with replace:true. Active-goal scope changes
+	// belong to goal_reconcile, so goal_set is hidden and stale calls are ignored.
 	pi.registerTool({
 		name: "goal_set",
 		label: "Set Session Goal",
 		description:
 			"Set (or replace) the durable session goal and start the auto-continuation loop. " +
 			"Use this to commit to a concrete, verifiable objective with explicit validation criteria, then work toward it until goal_complete or goal_block. " +
-			"If a goal is already active, paused, or blocked, call again with replace: true to overwrite it — do not silently redefine an in-progress goal around an easier task. " +
+			"If a goal is active, reconcile user-requested scope changes with goal_reconcile instead. If a goal is paused or blocked, pass replace: true only to replace it with a different objective. " +
 			"Do not call this for ordinary coding or research tasks, including multi-step work; use update_plan instead. " +
 			"Reserve goal_set for explicit user requests or long-running, multi-turn work—potentially hours—that genuinely needs automatic continuation. Most tasks should not create a goal.",
 		parameters: Type.Object({
 			objective: Type.String({ description: "The outcome that must become true. Concrete and verifiable, not a broad category of work." }),
 			validation: Type.Optional(Type.Array(Type.String(), { description: "Optional acceptance criteria that prove the objective is met." })),
-			replace: Type.Optional(Type.Boolean({ description: "Set to true to overwrite an existing active/paused/blocked goal. Required when a goal is already in progress." })),
+			replace: Type.Optional(Type.Boolean({ description: "Set to true to replace an existing paused or blocked goal with a different objective." })),
 		}),
 		renderShell: "self",
 		renderCall: renderGoalSetCall,
 		renderResult: renderGoalSetResult,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			if (state?.status === "active" && state.reconciliationPending) {
-				return {
-					content: [{ type: "text", text: "The latest user request must be reconciled with goal_reconcile before setting or replacing a goal." }],
-					details: { ok: false, reason: "reconciliation-required" },
-				};
-			}
 			const objective = (typeof params.objective === "string" ? params.objective : "").trim();
+			const validation = Array.isArray(params.validation)
+				? params.validation.map((item: unknown) => (typeof item === "string" ? item.trim() : "")).filter(Boolean)
+				: [];
+			if (state?.status === "active") {
+				if (state.reconciliationPending) return inactiveGoalToolResult("reconciliation-required", true);
+				const unchanged = objective === state.objective
+					&& validation.length === state.validation.length
+					&& validation.every((item: string, index: number) => item === state!.validation[index]);
+				return inactiveGoalToolResult(unchanged ? "goal-unchanged" : "goal-active", true);
+			}
 			if (!objective) {
 				return {
 					content: [{ type: "text", text: "goal_set requires a non-empty objective." }],
 					details: { ok: false, reason: "empty-objective" },
 				};
 			}
-			const validation = Array.isArray(params.validation)
-				? params.validation.map((item: unknown) => (typeof item === "string" ? item.trim() : "")).filter(Boolean)
-				: [];
 			// Guard against silently overwriting an in-progress goal. A completed
 			// goal is not "in progress", so it can be overwritten freely.
 			if (state && shouldConfirmReplacement(state) && !params.replace) {
