@@ -43,7 +43,7 @@ EOF
   exit 21
 fi
 
-if ! copilot -p 'Return exactly: COPILOT_MODEL_OK' -s --model "$model" >/tmp/copilot-model-check.txt 2>&1; then
+if ! printf 'Return exactly: COPILOT_MODEL_OK' | copilot -s --model "$model" >/tmp/copilot-model-check.txt 2>&1; then
   cat > "$status_file" <<'EOF'
 # Copilot Review Summary
 
@@ -69,7 +69,6 @@ fi
 
 diff_file="$out_dir/upstream.diff"
 git diff --no-ext-diff --find-renames "$base_ref...HEAD" > "$diff_file"
-
 run_review() {
   local name="$1"
   local prompt_file="$2"
